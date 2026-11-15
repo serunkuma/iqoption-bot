@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "IQ Option Tick Bridge",
+  "version": "1.0",
+  "permissions": [],
+  "host_permissions": ["http://localhost/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://*.iqoption.com/*"],
+      "js": ["inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://*.iqoption.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
