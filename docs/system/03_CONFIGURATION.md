@@ -53,7 +53,40 @@ A JSON object mapping string `active_id` keys to non-empty display names.
 
 ## Planned Configuration
 
-The planned configuration file is `config/default.toml`, overridable by environment variables.
+The AMT pipeline configuration exists at `config/default.toml` and is loaded by `amt/config.py`.
+
+```toml
+[instrument]
+symbol = "EURUSD"
+active_id = 0
+pip_size = 0.0001
+bin_size = 0.00005
+
+[candles]
+interval_seconds = 60
+
+[context]
+macro_candles = 7
+fast_candles = 3
+profile_min_ticks = 30
+value_area_target = 0.70
+tail_bins = 3
+single_print_max_ticks = 1
+volatility_min_changes = 10
+epsilon = 1e-9
+
+[labels]
+horizons_seconds = [60, 90, 120, 180]
+exit_tolerance_seconds = 5.0
+tie_policy = "exclude"          # "exclude" or "keep"
+
+[data]
+input_path = "data/ticks.csv"
+features_path = "data/features.csv"
+labels_path = "data/labels.csv"
+```
+
+Receiver configuration is still hard-coded and remains planned:
 
 ```toml
 [server]
@@ -67,29 +100,10 @@ asset_names_path = "asset_names.json"
 capture_raw = true
 data_dir = "data"
 
-[time]
-session_timezone = "UTC"
-
-[profile]
-window_seconds = 900
-bin_size_mode = "pip"          # "pip" or "atr"
-bin_size_pips = 0.5
-min_ticks = 30
-
-[features]
-sigma_window_candles = 15
-min_sigma_candles = 10
-short_velocity_seconds = 30
-long_velocity_seconds = 300
-
-[labels]
-expiry_seconds = 60
-tie_policy = "exclude"          # "exclude", "refund", or "loss"
-
 [model]
 path = "models/current"
-feature_version = "amt-v1"
-label_version = "next-close-v1"
+feature_version = "amt-v2"
+label_version = "tick-horizon-v1"
 
 [risk]
 max_stake = 1.0

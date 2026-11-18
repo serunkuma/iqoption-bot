@@ -110,7 +110,7 @@ If a doc lacks a status label, treat it as incomplete.
 | Validation gate | [system/09_MODEL_VALIDATION.md](system/09_MODEL_VALIDATION.md) |
 | Roadmap | [planning.md](planning.md) |
 | Operating the PoC | [../RUNBOOK.md](../RUNBOOK.md) |
-| Raw AMT input | [../sources/AMT_ML_DISCUSSION.md](../sources/AMT_ML_DISCUSSION.md) |
+| AMT reference implementation review | [research/AMT_REFERENCE_IMPLEMENTATION_2026-11-18.md](research/AMT_REFERENCE_IMPLEMENTATION_2026-11-18.md) |
 
 ---
 

@@ -1,0 +1,31 @@
+# AMT pipeline configuration.
+# One active instrument at a time. Multi-instrument is a future item.
+
+[instrument]
+symbol = "EURUSD"
+active_id = 0
+pip_size = 0.0001
+bin_size = 0.00005
+
+[candles]
+interval_seconds = 60
+
+[context]
+macro_candles = 7
+fast_candles = 3
+profile_min_ticks = 30
+value_area_target = 0.70
+tail_bins = 3
+single_print_max_ticks = 1
+volatility_min_changes = 10
+epsilon = 1e-9
+
+[labels]
+horizons_seconds = [60, 90, 120, 180]
+exit_tolerance_seconds = 5.0
+tie_policy = "exclude"
+
+[data]
+input_path = "data/ticks.csv"
+features_path = "data/features.csv"
+labels_path = "data/labels.csv"

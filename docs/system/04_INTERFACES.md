@@ -82,13 +82,14 @@ These contracts do not exist yet. They are defined here so components can be bui
   "active_id": 42,
   "symbol": "EURUSD",
   "price": 1.25,
-  "event_at": "2026-11-18T12:00:02.100Z",
-  "received_at": "2026-11-18T12:00:02.130Z",
+  "timestamp": "2026-11-18T13:00:02.130+01:00",
   "session_id": "session-uuid",
   "connection_id": "connection-uuid",
   "quality_flags": []
 }
 ```
+
+`timestamp` is the receiver's local receipt time. There is no separate event timestamp in this contract.
 
 ### 1-Minute Candle
 
@@ -96,7 +97,7 @@ These contracts do not exist yet. They are defined here so components can be bui
 {
   "active_id": 42,
   "interval": 60,
-  "bucket_start": "2026-11-18T12:00:00Z",
+  "bucket_start": "2026-11-18T13:00:00+01:00",
   "open": 1.25,
   "high": 1.251,
   "low": 1.2492,
@@ -111,15 +112,25 @@ These contracts do not exist yet. They are defined here so components can be bui
 
 ```json
 {
+  "tick_id": 1284,
   "active_id": 42,
-  "decision_at": "2026-11-18T12:01:00Z",
-  "feature_version": "amt-v1",
+  "timestamp": "2026-11-18T13:01:07.412+01:00",
+  "feature_version": "amt-v2",
   "features": {
-    "Z_POC": 0.42,
-    "Z_VAH": -0.18,
-    "Z_VAL": 1.02,
+    "price": 1.2505,
+    "poc": 1.25025,
+    "vah": 1.251,
+    "val": 1.2495,
+    "sigma_7": 0.00012,
+    "z_poc": 2.08,
+    "z_vah": -4.17,
+    "z_val": 8.33,
     "inside_va": 1,
-    "regime": "balance"
+    "tick_rate_7": 1.4,
+    "tick_rate_3": 2.1,
+    "tick_rate_forming": 3.0,
+    "tick_rate_3_7": 1.5,
+    "tick_rate_forming_3": 1.43
   }
 }
 ```
@@ -128,8 +139,10 @@ These contracts do not exist yet. They are defined here so components can be bui
 
 ```json
 {
+  "tick_id": 1284,
   "active_id": 42,
-  "decision_at": "2026-11-18T12:01:00Z",
+  "timestamp": "2026-11-18T13:01:07.412+01:00",
+  "horizon_seconds": 60,
   "direction": "call",
   "probability": 0.57,
   "payout": 0.82,
@@ -139,7 +152,7 @@ These contracts do not exist yet. They are defined here so components can be bui
 }
 ```
 
-`direction` is one of `call`, `put`, or `no_trade`.
+`direction` is one of `call`, `put`, or `no_trade`. A missing or ambiguous feature snapshot must produce `no_trade` with a reason code.
 
 ### Order and Trade Result
 
@@ -163,8 +176,8 @@ These contracts do not exist yet. They are defined here so components can be bui
 ## Interface Rules
 
 1. Every payload has a versioned schema.
-2. Every timestamp is ISO 8601 UTC with an explicit `Z` suffix.
-3. Every component records `received_at` and, where applicable, `event_at`.
+2. Every timestamp is ISO 8601 with an explicit UTC offset.
+3. Ticks carry exactly one timestamp: the receiver's local receipt time.
 4. Optional fields are nullable, not omitted inconsistently.
 5. Unknown fields are preserved in raw storage.
 6. Schema changes require a version bump and a migration note.

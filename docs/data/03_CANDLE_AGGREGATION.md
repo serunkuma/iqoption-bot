@@ -10,13 +10,12 @@ Status: Planning
 
 Candles provide a stable, lower-frequency representation of the tick stream. They are used for:
 
-- Labels and expiry outcomes.
+- Macro, fast, and forming context windows.
+- Profile and volatility windows.
 - Charting and inspection.
-- Context features.
 - Backtest reporting.
-- Fallback strategies that operate on completed candles.
 
-AMT/TPO features are computed from ticks, not from candles. Candles do not replace the tick stream.
+AMT/TPO features are computed from ticks, not from candles. Labels are tick-based, not candle-close based. Candles do not replace the tick stream and do not create decision points.
 
 ---
 
@@ -26,18 +25,21 @@ AMT/TPO features are computed from ticks, not from candles. Candles do not repla
 |------|------------|
 | Tick event | One accepted price update from the receiver |
 | Bucket | A half-open 60-second interval `[start, start + 60s)` |
-| Bucket start | UTC minute boundary aligned to the Unix epoch |
+| Bucket start | Whole-minute boundary in absolute time |
 | Tick price | The `close` value of the tick event |
 | Complete candle | A candle whose bucket has ended and whose final state is stored |
+| Forming candle | The current, incomplete bucket that receives incoming ticks |
 | Tick count | Number of accepted tick events assigned to the bucket |
 
 ### Boundary Rule
 
-Buckets are clock-aligned to UTC minute boundaries:
+Buckets are whole minutes in absolute time:
 
 ```text
-bucket_start = floor(event_time / 60) * 60
+bucket_start = floor(received_at / 60) * 60
 ```
+
+Whole-minute UTC boundaries coincide with whole local minutes for every real UTC offset. Using absolute time keeps two ticks with the same local wall-clock time but different offsets, as during a daylight-saving change, in separate buckets.
 
 Examples:
 
@@ -58,7 +60,6 @@ The project does not use rolling 60-second windows starting from the first tick.
 | `active_id` | Tick envelope | Yes | Candle key |
 | `close` | Tick payload | Yes | Tick price |
 | `received_at` | Receiver | Yes | Ordering and bucket assignment |
-| `event_at` | Tick payload `at` | Optional | Secondary timestamp after verification |
 | `symbol` | Tick payload or asset map | Optional | Display and metadata |
 | `interval` | Tick payload | Optional | Feed context; not used for bucket size |
 
@@ -142,13 +143,9 @@ If no ticks arrive during a minute:
 
 ### Duplicate Ticks
 
-Exact duplicates must not increment `tick_count` unless the duplicate is known to represent a genuine repeated price observation. The default policy is:
+Exact duplicate `(timestamp, price)` pairs are dropped before candles and features are built. This keeps tick density from being inflated by repeated frames.
 
-- Hash the raw payload and receipt window.
-- Drop exact duplicates that arrive within a short configurable window.
-- Count the drop in metrics.
-
-The final dedupe rule must be confirmed after inspecting real traffic.
+The offline loader implements this rule. Near-duplicates and genuinely repeated prices at different timestamps remain an open question and must be confirmed against real traffic.
 
 ---
 
@@ -225,11 +222,10 @@ Planned tables or files:
 
 ## Open Questions
 
-- Confirm that `received_at` should drive bucket assignment until `at` is verified.
-- Confirm whether exact duplicate prices should count as TPO observations.
+- Confirm whether non-identical repeated prices should count as TPO observations.
 - Confirm behaviour for very low-liquidity instruments with long gaps.
-- Confirm whether candles are needed for every `active_id` or only a selected universe.
 - Confirm retention: how much raw tick and candle history is required for backtests.
+- Confirm whether the live receiver or the offline build owns candle finalization.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Status: Current
 
-> **Current status: live tick-capture proof of concept.** The project captures IQ Option browser WebSocket messages and logs them locally. It does **not** generate candles, place trades, or manage risk yet. Do not use it with real money.
+> **Current status: live tick-capture proof of concept, plus an offline AMT feature library.** The project captures IQ Option browser WebSocket messages and logs them locally. An offline `amt` package builds TPO/Value Area features and tick-horizon labels from a tick CSV. It does **not** persist live ticks, run a model, place trades, or manage risk. Do not use it with real money.
 
 ---
 
@@ -13,15 +13,16 @@ Status: Current
 - `content.js` forwards matching payloads to `ws://localhost:8765`.
 - `receiver.py` validates each frame, keeps the last 500 raw messages per `active_id` in memory, and logs OHLCV fields.
 - `asset_names.json` maps `active_id` values to human-readable names for logs.
+- `amt/` builds `amt-v2` features and `tick-horizon-v1` labels offline from a tick CSV.
 
-The receiver console has been manually verified to show live prices from the platform.
+The receiver console has been manually verified to show live prices from the platform. The offline pipeline is unit-tested but is not yet fed by the receiver.
 
 ## What It Does Not Do Yet
 
-- No 1-minute candle generation.
-- No persistent tick storage.
-- No AMT/TPO features.
-- No ML model or signals.
+- No live 1-minute candle generation.
+- No persistent tick storage or replay.
+- No live AMT feature computation; the `amt` package is offline only.
+- No model, calibration, or signals.
 - No risk controls.
 - No order execution.
 - No backtesting.
@@ -61,7 +62,18 @@ Watch the receiver console. Each accepted frame logs the asset identity, `close`
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest -v test_receiver
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
 ```
+
+### 6. Build AMT features and labels offline
+
+Prepare a CSV with `timestamp,price` and an optional `active_id`, then run:
+
+```powershell
+.\.venv\Scripts\python.exe -m amt.build --input data\ticks.csv
+```
+
+Timestamps must be ISO 8601 with an offset. Outputs default to `data/features.csv` and `data/labels.csv`, which are gitignored.
 
 ## Architecture
 
@@ -73,9 +85,15 @@ IQ Option page WebSocket
     -> receiver.py
     -> in-memory raw message buffer (500 per active_id)
     -> console log
+
+Offline, from a tick CSV:
+    -> amt/timeframes.py   (whole-minute candles, forming vs completed)
+    -> amt/profile.py      (TPO, POC, VAH, VAL, excess)
+    -> amt/features.py     (amt-v2, one row per tick)
+    -> amt/labels.py       (60/90/120/180s tick-horizon labels)
 ```
 
-The target architecture adds raw tick persistence, 1-minute candles, AMT features, labels, a two-stage model, risk controls, and paper/demo-first execution. See the [system overview](docs/system/01_OVERVIEW.md).
+The target architecture adds raw tick persistence, live candles, a two-stage model, risk controls, and paper/demo-first execution. See the [system overview](docs/system/01_OVERVIEW.md).
 
 ## Documentation
 
@@ -107,7 +125,7 @@ The target architecture adds raw tick persistence, 1-minute candles, AMT feature
 - Windows with PowerShell.
 - Python 3.11 or newer.
 - Chrome or a Chromium-based browser.
-- `websockets>=12,<16`.
+- `numpy>=1.26,<3` and `websockets>=12,<16`.
 
 ---
 

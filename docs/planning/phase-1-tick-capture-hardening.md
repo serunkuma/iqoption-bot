@@ -26,10 +26,10 @@ Out of scope: candle aggregation, AMT features, ML, execution.
 
 - [ ] Capture a representative raw sample of frames.
 - [ ] Document every field that appears.
-- [ ] Determine whether `at` is seconds or milliseconds.
-- [ ] Determine whether `at` is a tick time, candle start, or server time.
-- [ ] Decide whether `received_at` or `event_at` drives ordering.
-- [ ] Document the timestamp decision in [Tick Stream Contract](../data/01_TICK_STREAM.md).
+- [x] Decide the timestamp: one local receipt time per tick.
+- [x] Document the timestamp decision in [Tick Stream Contract](../data/01_TICK_STREAM.md).
+- [ ] Confirm that `at` can stay ignored without losing information.
+- [ ] Confirm whether a frame is a tick or a partial candle by comparing `close` with subsequent prices.
 
 ### Persistence
 

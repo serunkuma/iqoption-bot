@@ -93,22 +93,22 @@ The receiver recognises the identity fields above when formatting logs. They are
 
 ## Timestamp Semantics
 
-Two times matter:
+The project uses **one timestamp**: the receiver's local receipt time.
 
 | Time | Source | Status |
 |------|--------|--------|
-| Event time | `msg.at` | Semantics unverified |
-| Receipt time | Local receiver clock | Not recorded yet |
+| Receipt time | Receiver clock, captured when the frame is accepted | Decided; not recorded by the current receiver |
+| Payload `at` | `msg.at` | Ignored for now |
 
-Until `at` is verified, the docs must not assume it is a tick timestamp or a candle start time.
+`msg.at` is not used for ordering, bucketing, or labels. Its semantics remain unverified and it may be a candle start, a partial-candle marker, or a broker-specific value.
 
-### Planned Timestamp Rules
+### Decided Timestamp Rules
 
-- Record `received_at` in UTC for every accepted frame.
-- Record `event_at` from `msg.at` when present.
-- Keep both values in storage.
-- Use `received_at` for ordering and gap detection until `event_at` is proven reliable.
-- Document any timezone conversion explicitly.
+- Record `received_at` for every accepted frame.
+- Store it as an ISO 8601 string with an explicit UTC offset, for example `2026-11-18T13:42:36.123+01:00`.
+- Bucket candles by absolute minute, which matches the local minute for every real UTC offset and keeps repeated local minutes distinct across a daylight-saving change.
+- Order ticks by `received_at`.
+- Use only one instrument at a time. Multi-instrument capture is a future item.
 
 ---
 
@@ -156,21 +156,24 @@ Invalid frames must be counted and sampled in logs, not silently discarded. The 
 The proof of concept does not persist ticks. The planned raw-capture format is JSONL:
 
 ```json
-{"received_at":"2026-11-18T12:00:00.123Z","session_id":"...","connection_id":"...","active_id":42,"event_at":123,"raw":{...}}
+{"received_at":"2026-11-18T13:00:00.123+01:00","session_id":"...","connection_id":"...","active_id":42,"raw":{...}}
 ```
 
-JSONL is chosen first because it is append-only, easy to inspect, and replayable. SQLite or Parquet can follow once query and volume requirements are clearer.
+JSONL is chosen first because it is append-only, easy to inspect, and replayable. SQLite or Parquet can follow once query and volume requirements are clearer. The payload `at` value stays inside `raw` and is not promoted to a timestamp column.
+
+### Duplicate Rule
+
+The offline loader drops exact `(timestamp, price)` duplicates before building features. This prevents repeated frames from inflating tick density. Near-duplicates and genuinely repeated prices are still an open question.
 
 ---
 
 ## Open Questions
 
 - Is the intercepted frame a raw tick, a partial-candle update, or a completed-candle event?
-- Is `at` a price timestamp, a candle start time, or something else?
-- Does `at` arrive in seconds or milliseconds?
-- Does the feed send repeated identical prices, and should those count as TPO ticks?
+- Does the feed send repeated identical prices, and should non-identical repeats count as TPO ticks?
 - Are there other message types that carry price updates and should be captured?
 - What is the expected message rate per `active_id` during an active session?
+- How should multi-instrument capture partition storage and features if it is added later?
 
 ---
 

@@ -45,27 +45,41 @@ A model with 54% accuracy is profitable at 90% payout and unprofitable at 70% pa
 
 ## Prediction Target
 
-Default target:
+Predictions are tick-based. A model scores each accepted tick as a potential entry point.
 
-- **Horizon:** 1 minute.
-- **Decision time:** close of a completed 1-minute candle.
-- **Entry price:** close of that completed candle.
-- **Expiry:** 1 minute after entry.
-- **Exit price:** close of the next completed 1-minute candle.
+| Element | Definition |
+|---------|------------|
+| Decision time | Timestamp of one accepted tick |
+| Entry price | That tick's price |
+| Horizons | 60, 90, 120, 180 seconds (configurable) |
+| Exit | First tick at or after `entry + horizon` within the tolerance window |
+| Tie | Exit price exactly equals entry price |
 
-Label:
+Label for one tick and one horizon `h`:
 
 ```text
-call_wins = 1 if exit_price > entry_price else 0
-put_wins  = 1 if exit_price < entry_price else 0
-tie       = 1 if exit_price == entry_price else 0
+exit_price_h = price of the first tick with timestamp >= t + h
+               and timestamp <= t + h + exit_tolerance
+
+label_h = call    if exit_price_h > entry_price
+        = put     if exit_price_h < entry_price
+        = tie     if exit_price_h == entry_price
+        = missing if no tick satisfies the exit window
 ```
 
-Default tie policy: ties are excluded from directional training and counted separately. The execution policy must define whether ties are refunded or lost.
+Defaults: `exit_tolerance = 5 seconds`, `tie_policy = exclude`.
 
-### Why the next completed candle
+Ties are never mapped to Put. A missing exit is never mapped to a directional label. Both stay explicit, and rows that are not `call` or `put` are marked unusable for directional training.
 
-Using the next completed candle gives a clean, reproducible label. It avoids intrabar path ambiguity in the first version. Path-aware labels can be added later.
+### Why tick-based labels
+
+Binary options let the trader enter at an arbitrary moment, including mid-candle. Tick-based labels match that mechanic and allow every horizon to be evaluated from the same entry.
+
+The cost is overlapping observations: adjacent ticks have nearly identical features and outcomes that overlap in time. This is handled at validation time, not by pretending the rows are independent. See [Model Validation](../system/09_MODEL_VALIDATION.md).
+
+### Candles are context, not decisions
+
+1-minute candles provide the macro, fast, and forming context windows. They define value, volatility, and activity baselines. They do not create decision points or labels.
 
 ---
 
@@ -75,10 +89,12 @@ These are documented for future research, not the default:
 
 | Label type | Definition | Trade-off |
 |------------|------------|-----------|
-| Next-close (default) | Exit at the close of the next 1-minute candle | Simple, reproducible, ignores intrabar path |
+| Tick fixed-offset (default) | Sign of price change at a fixed second offset | Matches arbitrary entry; overlapping observations |
+| Candle close | Exit at the close of a later completed candle | Cleaner for 60/120/180; cannot express 90s exactly |
 | Touch / barrier | Whether price touches a barrier before expiry | Closer to some platform mechanics; path-dependent |
 | Triple barrier | Profit target, stop, and time barrier | More realistic risk modelling; more complex |
-| Direction at fixed offset | Sign of price change at a fixed second offset | Fine-grained but sensitive to timing |
+
+A candle-close variant is a research label, not the default. It must carry its own `label_version`.
 
 Any change to the label definition requires a dataset version bump.
 
@@ -143,36 +159,42 @@ A model can have good AUC and poor calibration. Calibration is mandatory.
 One row per:
 
 - `active_id`
-- Decision timestamp
+- Tick timestamp
 - Expiry horizon
 - Feature version
 - Label version
+
+The feature table has one row per tick. The label table is long format: one row per tick per horizon. Joining them on `tick_id` gives the training dataset.
 
 Required columns:
 
 | Column | Meaning |
 |--------|---------|
-| `decision_at` | Timestamp of the completed candle close |
+| `tick_id` | Row ordinal in the sorted tick stream |
+| `timestamp` | Tick receipt time, ISO 8601 with offset |
 | `active_id` | Instrument |
-| `entry_price` | Close of the decision candle |
-| `exit_price` | Close of the expiry candle |
-| `label_call` | Whether Call won |
-| `label_put` | Whether Put won |
-| `tie` | Whether the outcome was a tie |
+| `entry_price` | Tick price at entry |
+| `horizon_seconds` | 60, 90, 120, or 180 |
+| `exit_timestamp` | Receipt time of the exit tick, or null |
+| `exit_price` | Exit tick price, or null |
+| `exit_delay_seconds` | Delay beyond the exact horizon, or null |
+| `label` | `call`, `put`, `tie`, or `missing` |
+| `usable` | `1` when the row may be used for directional training |
 | `payout` | Payout used for EV |
-| `feature_version` | Feature set version |
-| `label_version` | Label definition version |
-| `quality_flags` | Gaps, late ticks, stale data |
+| `feature_version` | Feature set version, for example `amt-v2` |
+| `label_version` | Label definition version, for example `tick-horizon-v1` |
+| `quality_flags` | Gaps, stale data, missing profile |
 
 ### Exclusion Rules
 
 Exclude rows when:
 
-- The decision candle or expiry candle is incomplete.
-- There is a gap in either candle.
-- The expiry candle is missing.
+- `label` is `tie` and `tie_policy = "exclude"`.
+- `label` is `missing`.
+- The profile or volatility is missing and the model requires them.
 - `active_id` metadata is missing for payout or pip size.
 - The row falls outside the configured session.
+- The tick is a duplicate or flagged out of order.
 
 Exclusions must be counted and reported, not silently dropped.
 
@@ -183,8 +205,9 @@ Exclusions must be counted and reported, not silently dropped.
 1. Features at time `t` may use only data up to `t`.
 2. The label uses data after `t`; it must never enter the feature vector.
 3. Train, validation, and test splits are chronological.
-4. Purge rows near split boundaries to prevent overlapping label horizons.
+4. Purge rows whose label window crosses a split boundary; the purge length is the longest horizon plus tolerance.
 5. Do not use future payout or future instrument metadata in historical labels unless the value was known at the time.
+6. Overlapping label windows are expected. They reduce effective sample size and must be handled by purging and by reporting the number of independent windows, not just the row count.
 
 ---
 

@@ -172,9 +172,7 @@ Restart the receiver. The mapping only changes the log label.
 
 ### Documentation validation
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\validate_scaffold.ps1
-```
+The scaffold validator was removed with the scaffolding. Use the manual checklist in `docs/system/05_TESTING.md`: status labels, resolving index links, no links to removed `sources/` or `scripts/` folders, and matching commands across `AGENTS.md`, `README.md`, and this runbook.
 
 ---
 
@@ -201,8 +199,10 @@ Before any trading procedure is added:
 | Install dependencies | `py -m pip install -r requirements.txt` |
 | Run receiver | `.\.venv\Scripts\python.exe receiver.py` |
 | Run tests | `.\.venv\Scripts\python.exe -m unittest -v test_receiver` |
+| Run AMT tests | `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v` |
+| Build features and labels | `.\.venv\Scripts\python.exe -m amt.build --input data\ticks.csv` |
 | Check port | `Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue` |
-| Validate docs | `powershell -ExecutionPolicy Bypass -File scripts\validate_scaffold.ps1` |
+| Check docs | Manual checklist in `docs/system/05_TESTING.md` |
 
 ---
 

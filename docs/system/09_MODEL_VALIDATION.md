@@ -30,10 +30,11 @@ Status: Planning
 Rules:
 
 - Chronological order only.
-- Purge rows whose label horizon overlaps the next split.
-- Embargo a configurable number of rows after each split.
+- Purge rows whose label window crosses the next split. The purge length is the longest horizon plus exit tolerance: 180 seconds + 5 seconds by default.
+- Embargo a configurable period after each split.
 - The test set is touched once per candidate model, not tuned against repeatedly.
 - Walk-forward evaluation is required for the final candidate.
+- Report metrics per horizon. A model that works only at 180s is a different claim from one that works at 60s.
 
 ### Walk-Forward
 
@@ -45,6 +46,43 @@ fold 3: train [t0, t3) -> validate [t3, t4)
 ```
 
 Report per-fold and aggregate metrics. A model that works in only one fold is not validated.
+
+---
+
+## Overlapping Tick Labels
+
+Rows are ticks, so observations are not independent:
+
+- Adjacent ticks share almost all of their feature window.
+- Label windows overlap: a 180-second label covers 180 seconds of other rows.
+- A raw row count overstates the number of independent outcomes.
+
+Required handling:
+
+1. Purge and embargo by time, not by row count.
+2. Report the number of independent expiry windows as well as the row count.
+3. Report results per horizon; longer horizons overlap more.
+4. Simulate trades with at most one open position per instrument, using the same entry and expiry rules.
+5. Do not compare row-level win rates directly across horizons without stating the overlap.
+
+Optional but recommended: cluster standard errors by time bucket, or report block-bootstrap confidence intervals over contiguous time blocks.
+
+---
+
+## Trade Simulation
+
+The backtest must not assume every labelled row is tradeable.
+
+| Rule | Requirement |
+|------|-------------|
+| Position limit | At most one open trade per active instrument |
+| Entry | Signal tick plus configured execution latency |
+| Expiry | The same horizon used for the label |
+| Payout | The payout available at entry, not a global average |
+| Overlap | A new signal is skipped while a trade is open |
+| Reporting | Count skipped signals and overlapping labels separately |
+
+A strategy that only looks profitable because it takes every overlapping signal is not validated.
 
 ---
 
@@ -91,6 +129,8 @@ The ML model must beat the rule-based AMT baseline and the random baseline on ou
 | EV per trade | Primary profitability measure |
 | Trade count | Statistical significance |
 | Coverage | Share of rows that produce a trade |
+| Independent expiry windows | Honest measure of sample size |
+| Skipped overlapping signals | Shows how much the position limit removes |
 | Average payout | Correct cost assumption |
 | Max drawdown | Risk |
 | Consecutive losses | Risk-limit design |
@@ -140,13 +180,14 @@ Monitoring thresholds are configuration values with documented defaults.
 
 Execution work may begin only when all conditions hold:
 
-- [ ] Out-of-sample EV per trade is positive after using the actual payout.
-- [ ] Win rate exceeds `1 / (1 + payout)` by the configured margin.
+- [ ] Out-of-sample EV per trade is positive after using the actual payout, for at least one horizon.
+- [ ] Win rate exceeds `1 / (1 + payout)` by the configured margin for that horizon.
 - [ ] Calibration error is within tolerance.
 - [ ] Results are stable across walk-forward folds.
-- [ ] Results are stable across instruments and weekday/weekend splits.
+- [ ] Results survive the one-open-position trade simulation.
+- [ ] Results are stable across weekday/weekend splits.
 - [ ] The rule-based AMT baseline and random baseline are beaten.
-- [ ] Trade count is statistically meaningful.
+- [ ] Independent expiry windows, not just row counts, are large enough.
 - [ ] Feature and label versions are recorded and reproducible.
 - [ ] A paper-trading run confirms the live pipeline matches offline results.
 

@@ -12,18 +12,21 @@ Status: Current
 |------|------------|--------|
 | Capture scope | The extension forwards only frames whose outer `name` is `"candle-generated"` | Other price-bearing message types may be missed; feed changes can silently break capture |
 | Frame semantics | It is not verified whether a frame is a tick, a partial-candle update, or a completed candle | The tick/candle model is provisional |
-| Timestamps | `msg.at` semantics are unknown; receipt time is not recorded | Ordering, gaps, and causal features cannot be trusted yet |
+| Timestamps | `msg.at` semantics are unknown; the receiver does not yet record receipt time | Ordering, gaps, and causal features cannot be trusted yet |
+| Instruments | Capture is effectively single-instrument; nothing partitions by `active_id` end to end | Multi-instrument research is blocked |
 | Buffer | 500 raw messages per `active_id`, in memory only | Restart loses data; history depth may be seconds, not minutes |
-| Persistence | No raw tick store, no candle store, no replay | AMT features and backtests are not reproducible |
-| Aggregation | No 1-minute candle builder | Labels, charting, and context features are blocked |
-| Data quality | No duplicate, gap, out-of-order, stale, or rate checks | Tick density can be inflated or biased |
-| Configuration | Host, port, buffer size, and paths are hard-coded | Multi-asset and deployment changes require code edits |
+| Persistence | No raw tick store, no candle store, no replay | AMT features and backtests are not reproducible from live data |
+| Aggregation | No live 1-minute candle builder | The offline loader groups ticks but the receiver does not |
+| Data quality | No duplicate, gap, out-of-order, stale, or rate checks in the receiver | Tick density can be inflated or biased |
+| Configuration | Receiver host, port, and buffer size are hard-coded | Multi-asset and deployment changes require code edits |
 | Logging | Plain text logs; no metrics or structured fields | Failures are hard to aggregate or alert on |
-| Tests | Three unit tests; no integration or load tests | Reconnect and malformed-frame behaviour is under-tested |
+| Tests | Receiver tests only; the `amt` package has unit tests but no integration tests | Live-to-offline parity is untested |
 | Packaging | Flat files; `requirements.txt` only | No installable package or reproducible dev workflow |
 | Security | Localhost binding only; no authentication | Acceptable for local PoC; must be revisited before remote deployment |
 | Execution | No order placement, risk controls, or kill switch | Live trading is not possible and must not be attempted |
-| Analytics | No AMT, signals, backtesting, or ML | The core trading hypothesis is unvalidated |
+| Feature engine | `amt-v2` exists offline only; no live receiver integration | Features cannot yet be produced from a live stream |
+| Feature performance | The offline build loops per tick and recomputes per candle; it is not vectorised | Large histories and live inference need a faster design |
+| Models | No labels join, model, calibration, or backtest | The core trading hypothesis is unvalidated |
 | Documentation | README overstates the buffer as "candle history" | Misleads future work and agents |
 
 ---
@@ -35,7 +38,7 @@ Status: Current
 | ID | Improvement | Rationale | Acceptance Criteria |
 |----|-------------|-----------|---------------------|
 | P0-1 | Define and verify the tick-event contract | AMT depends on knowing exactly what one message represents | Documented schema; sample traffic inspected; `at` semantics recorded |
-| P0-2 | Record `received_at` for every accepted frame | Establishes local ordering independent of broker timestamps | Every stored tick has `received_at` in UTC |
+| P0-2 | Record `received_at` for every accepted frame | Establishes local ordering independent of broker timestamps | Every stored tick has one ISO 8601 timestamp with an explicit offset |
 | P0-3 | Persist raw frames as JSONL | Restart-safe capture and replay | Append-only file; rotation policy; replay script reads it |
 | P0-4 | Add data-quality counters | Tick density is only valid on a clean stream | Counts for received, accepted, rejected, malformed, duplicate, stale, late |
 | P0-5 | Add gap and reconnect tracking | Missing data must be visible in features and backtests | Session and gap records; candles can be flagged |
@@ -52,18 +55,20 @@ Status: Current
 | P1-1 | Build 1-minute OHLCV aggregation | Needed for labels, charting, and context | Candle builder passes OHLC and boundary tests |
 | P1-2 | Add instrument metadata | Pip size and payout drive bins and expected value | `assets.json` with validation |
 | P1-3 | Add durable storage | In-memory deque is insufficient for research | SQLite for candles/trades; Parquet for bulk research |
-| P1-4 | Build TPO/Value Area engine | Core AMT representation | POC/VAH/VAL match worked examples; causal windows enforced |
-| P1-5 | Build AMT feature engine | Converts AMT theory into model inputs | Feature vector documented and reproducible |
+| P1-4 | Build TPO/Value Area engine | Core AMT representation | Offline engine exists in `amt/profile.py`; POC/VAH/VAL match the worked example and are tested |
+| P1-5 | Build AMT feature engine | Converts AMT theory into model inputs | Offline `amt-v2` features exist with tests; live integration remains |
 | P1-6 | Build a rule-based AMT baseline | Establishes a benchmark before ML | Baseline signals and backtest results recorded |
-| P1-7 | Build a backtesting harness | Measures edge after payout | Walk-forward, payout-aware metrics, no leakage |
+| P1-7 | Build a backtesting harness | Measures edge after payout | Walk-forward, payout-aware metrics, one open position, no leakage |
 | P1-8 | Add weekday/weekend regime analysis | OTC pricing may change on weekends | Separate metrics and a documented filter decision |
+| P1-9 | Vectorise or stream the feature engine | Per-tick loops will not scale to long histories or live inference | Documented performance baseline and an incremental design |
+| P1-10 | Join features and labels into a dataset | Models need one reproducible table | Dataset build with feature, label, and config versions recorded |
 
 ### P2 — ML, execution, and operations
 
 | ID | Improvement | Rationale | Acceptance Criteria |
 |----|-------------|-----------|---------------------|
-| P2-1 | Build labels and payout-aware EV | Accuracy alone is not sufficient | Labels, breakeven win rate, and EV documented and tested |
-| P2-2 | Build the two-stage ML pipeline | Approach A is the primary design | Regime gate plus conditional models; reproducible training |
+| P2-1 | Build payout-aware EV and calibration | Accuracy alone is not sufficient | Labels joined to models; breakeven win rate and EV tested |
+| P2-2 | Build the two-stage ML pipeline | Approach A is the primary design | Regime gate plus conditional models per horizon; reproducible training |
 | P2-3 | Add calibration and drift monitoring | Probabilities must be trustworthy over time | Reliability curve, Brier score, drift metrics |
 | P2-4 | Build paper/demo execution | Safe path before real money | Order lifecycle, idempotency, journal |
 | P2-5 | Add risk controls and kill switch | Limits losses and stops runaway behaviour | Daily loss limit, max stake, consecutive-loss limit, manual kill |

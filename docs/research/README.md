@@ -85,20 +85,11 @@ File: docs/research/INCIDENT_*.md
 | **When to Read** | Before implementing | When investigating WHY decisions were made |
 | **Keep Updated** | YES, agents must keep current | NO, historical docs stay as-is |
 
-## How It Differs from sources/
+## Raw Inputs
 
-`sources/` and `docs/research/` are both Historical, but they serve different roles:
+Early project inputs, such as the original AMT/ML discussion and interview transcript, were absorbed into the specifications and then removed from the working tree. They remain available in git history.
 
-| Aspect | sources/ | docs/research/ |
-|--------|----------|----------------|
-| **Content** | Raw inputs (requirements, interview transcripts, attached docs) | Curated notes (removed features, abandoned approaches, incident reports) |
-| **When created** | At scaffolding time, frozen immediately | Throughout the project's life, as decisions and incidents accumulate |
-| **Editing** | Never edit — frozen by design | Append new entries; existing entries stay as-is |
-| **Author** | The user (provided source material) + the AI (interview transcript) | Developers and agents, post-decision |
-
-Together they tell the full story: `sources/` is what we started with; `docs/research/` is what we learned along the way.
-
-See [sources/README.md](../../sources/README.md) for the full guide.
+Do not recreate a `sources/` directory. When new raw material arrives, absorb its content into `docs/` and record any decision it changes in the decision log or a research note.
 
 ## When to Move Docs Here
 

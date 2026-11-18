@@ -2,7 +2,7 @@
 
 Status: Planning
 
-> This document specifies how tick density becomes a rolling Time-Price Opportunity (TPO) profile and how the Point of Control (POC), Value Area High (VAH), and Value Area Low (VAL) are computed. It is not implemented yet.
+> This document specifies how tick density becomes a rolling Time-Price Opportunity (TPO) profile and how the Point of Control (POC), Value Area High (VAH), and Value Area Low (VAL) are computed. The offline implementation is `amt/profile.py`.
 
 ---
 
@@ -39,11 +39,13 @@ A TPO profile answers:
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| Window length | 15 minutes | 30-minute preset also supported |
-| Bin size | 0.5 pip | Instrument-specific; ATR-scaled alternative |
+| Window length | Last 7 completed 1-minute candles | Matches the macro context window |
+| Bin size | 0.5 pip | Instrument-specific; configured per active instrument |
 | Value Area target | 70% | Classic Market Profile convention |
-| Minimum ticks | 30 | Below this, features are null |
-| Update cadence | Every tick or every 5 seconds | Must be documented per implementation |
+| Minimum ticks | 30 | Below this, the profile is null |
+| Update cadence | Once per completed candle | Constant within the forming candle |
+
+The profile is rebuilt from the macro window when a candle completes. It does not change on every tick, which keeps it deterministic and cheap.
 
 ### Bin Size
 
@@ -74,7 +76,7 @@ The same bin size must be used for a given feature snapshot. Changing bin size i
 
 ### 1. Select ticks
 
-Select accepted ticks for the instrument with `received_at` in `[t - window, t]`.
+Select accepted ticks from the last `macro_candles` completed candles. The forming candle is excluded.
 
 Exclude ticks flagged as duplicates or out of order.
 
@@ -82,9 +84,13 @@ Exclude ticks flagged as duplicates or out of order.
 
 ```text
 for each tick in window:
-    bin_index = floor(tick.price / bin_size)
+    bin_index = floor(price / bin_size)
     counts[bin_index] += 1
 ```
+
+Bins are contiguous integer indices from the lowest to the highest observed bin. Interior bins with no ticks keep a count of zero, so price gaps remain visible in the profile.
+
+Prices and bin sizes are decimal values stored as binary floats, so a price that sits exactly on a bin edge can divide to just below an integer. Implementations must correct this drift, for example by adding a scaled epsilon before flooring, so `1.0000 / 0.0010` maps to bin `1000` rather than `999`.
 
 ### 3. Find POC
 
@@ -130,8 +136,9 @@ while included_count < target:
 Notes:
 
 - The pair expansion may overshoot the 70% target. That is expected and allowed.
-- If fewer than two bins remain on one side, use the available bins.
-- An alternative one-bin-at-a-time expansion may be documented as a variant, but the pair method is the default.
+- Only non-empty bins are candidates for expansion. A far empty bin must not extend VAH or VAL while adding no ticks. Interior gaps inside the included range are still spanned.
+- If fewer than two non-empty bins remain on one side, use the available bins.
+- An alternative one-bin-at-a-time expansion may be documented as a variant, but the pair method is the default and the only implemented method.
 
 ### 5. Compute edges
 
@@ -169,7 +176,7 @@ bin_upper(i) = (i + 1) * bin_size
 
 ## Worked Example
 
-Window: 15 minutes. Bin size: 0.0005 for readability.
+Window: 7 completed candles. Bin size: 0.0005 for readability.
 
 | Bin | Range | Tick count |
 |-----|-------|------------|
@@ -198,7 +205,7 @@ The value area contains 70 of 81 ticks, or 86.4%, because the pair expansion ove
 
 | Case | Policy |
 |------|--------|
-| Fewer than minimum ticks | Emit `null` profile and mark `insufficient_data` |
+| Fewer than minimum ticks | Emit `null` profile and set `profile_missing`; never fabricate POC/VAH/VAL from the current price |
 | All ticks in one bin | POC = that bin; VAH/VAL = bin edges |
 | Multiple POC ties | Use the documented tie-break |
 | Price far outside VA | Still compute; distance features capture the extension |

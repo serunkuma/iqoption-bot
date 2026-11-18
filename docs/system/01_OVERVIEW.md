@@ -53,7 +53,7 @@ console log
 ### Not Verified
 
 - Whether the intercepted frame represents a raw tick, a partial-candle update, or a completed candle.
-- The exact meaning of `at` and whether it is a candle start, a price timestamp, or another server timestamp.
+- The exact meaning of `at` and whether it is a candle start, a price timestamp, or another server timestamp. It is currently ignored.
 - Long-running stability under a full market session.
 - Behaviour across reconnects, broker disconnects, and weekends.
 - Data completeness and ordering guarantees.
@@ -75,13 +75,14 @@ Tick stream
     │  JSONL first; SQLite/Parquet later
     ▼
 [1-minute candle builder]
-    │  clock-aligned UTC OHLCV; volume = tick count
+    │  whole-minute OHLCV; volume = tick count
     ▼
 [Feature engine]
-    │  TPO/Value Area, normalized distances, excess, velocity, regime
+    │  macro 7 / fast 3 / forming layers, TPO value area,
+    │  normalized distance, excess, tick rate, price speed, range
     ▼
 [Label builder]
-    │  binary-option outcome at expiry; payout-aware EV
+    │  tick-horizon direction labels at 60/90/120/180s; payout-aware EV
     ▼
 [Model and signal layer]
     │  two-stage regime architecture; calibration; no-trade output

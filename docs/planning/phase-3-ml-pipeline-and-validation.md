@@ -24,12 +24,13 @@ Out of scope: live execution.
 
 ### Labels and EV
 
-- [ ] Implement the next-close 1-minute label.
-- [ ] Implement tie policy.
-- [ ] Implement payout-aware EV.
-- [ ] Implement breakeven win rate.
-- [ ] Add exclusion rules for gaps and incomplete candles.
-- [ ] Add label-version metadata.
+- [x] Implement tick-horizon labels for 60/90/120/180 seconds.
+- [x] Implement first-tick-at-or-after-horizon exit with tolerance.
+- [x] Implement explicit tie and missing-exit handling.
+- [ ] Implement payout-aware EV per horizon.
+- [ ] Implement breakeven win rate per horizon.
+- [ ] Add exclusion rules for missing profiles and gaps.
+- [ ] Add label-version metadata to the dataset.
 
 ### Dataset
 
@@ -41,19 +42,21 @@ Out of scope: live execution.
 ### Models
 
 - [ ] Implement the rule-based Stage 1 regime gate.
-- [ ] Train a balance model.
-- [ ] Train an imbalance model.
+- [ ] Train balance and imbalance models per horizon.
 - [ ] Calibrate probabilities on a held-out calibration set.
-- [ ] Add a no-trade threshold.
+- [ ] Add a no-trade threshold and explicit reason codes.
+- [ ] Skip and report empty or one-class regimes.
 - [ ] Register model artifacts and versions.
 - [ ] Document Approach B as research only.
 
 ### Validation
 
 - [ ] Run walk-forward validation.
-- [ ] Report metrics by fold, regime, instrument, and session.
+- [ ] Report metrics by fold, regime, horizon, and session.
 - [ ] Report calibration curves and Brier score.
 - [ ] Compare with random and rule-based baselines.
+- [ ] Report independent expiry windows alongside row counts.
+- [ ] Simulate trades with one open position at a time.
 - [ ] Compare weekday and weekend results.
 - [ ] Compare with live spot FX if available.
 - [ ] Run drift checks.

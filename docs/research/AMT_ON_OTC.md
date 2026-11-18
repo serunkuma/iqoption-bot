@@ -99,7 +99,7 @@ This is a hypothesis about the broker's algorithm, not a claim about real market
 - [TPO and Value Area](../data/04_TPO_VALUE_AREA.md)
 - [AMT Feature Specification](../data/05_AMT_FEATURE_SPEC.md)
 - [Model Validation](../system/09_MODEL_VALIDATION.md)
-- [Raw AMT input](../../sources/AMT_ML_DISCUSSION.md)
+- [AMT reference implementation review](AMT_REFERENCE_IMPLEMENTATION_2026-11-18.md)
 
 ---
 

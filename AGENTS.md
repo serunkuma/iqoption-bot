@@ -29,14 +29,24 @@ iqoption-bot/
 │   ├── manifest.json               # MV3 manifest
 │   ├── inject.js                   # Page-world WebSocket interception
 │   └── content.js                  # Local forwarder with reconnect and queue
-├── scripts/
-│   ├── validate_scaffold.sh        # Documentation health checks
-│   └── validate_scaffold.ps1       # Windows equivalent
-├── sources/                        # Frozen inputs (historical)
-│   ├── README.md
-│   ├── PROJECT_CONTEXT.md
-│   ├── INTERVIEW_TRANSCRIPT.md
-│   └── AMT_ML_DISCUSSION.md
+├── amt/                            # Offline AMT feature and label pipeline
+│   ├── __init__.py
+│   ├── config.py                   # TOML config loading and validation
+│   ├── timeframes.py               # Minute buckets, forming vs completed
+│   ├── profile.py                  # TPO profile, POC/VAH/VAL, excess
+│   ├── features.py                 # amt-v2 features, one row per tick
+│   ├── labels.py                   # Tick-horizon labels
+│   ├── data.py                     # Tick loading, dedupe, CSV output
+│   └── build.py                    # Offline CLI
+├── config/
+│   └── default.toml                # Active instrument and pipeline settings
+├── tests/                          # AMT unit tests
+│   ├── test_config.py
+│   ├── test_data.py
+│   ├── test_timeframes.py
+│   ├── test_profile.py
+│   ├── test_features.py
+│   └── test_labels.py
 ├── docs/
 │   ├── index.md
 │   ├── planning.md
@@ -48,7 +58,7 @@ iqoption-bot/
 └── .gitignore
 ```
 
-The documentation tree is the permanent home for project knowledge. Scaffold-time tools (`prompt.md`, `extract.md`, `MERGE_BACK.md`, `HOW_TO.md`, `profiles/`) were used only during the initial documentation migration and are not part of the repository.
+The documentation tree is the permanent home for project knowledge. Scaffold-time tools (`prompt.md`, `extract.md`, `MERGE_BACK.md`, `HOW_TO.md`, `profiles/`, `sources/`, and `scripts/`) were used only during migration and are no longer part of the repository. Their useful content is in `docs/`; raw inputs remain in git history.
 
 ---
 
@@ -88,7 +98,16 @@ The receiver listens on `ws://localhost:8765`.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest -v test_receiver
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
 ```
+
+### Build AMT features and labels offline
+
+```powershell
+.\.venv\Scripts\python.exe -m amt.build --input data\ticks.csv
+```
+
+Input CSV columns: `timestamp,price` plus an optional `active_id`. Timestamps must be ISO 8601 with an offset. Outputs default to `data/features.csv` and `data/labels.csv`, which are gitignored.
 
 ### Stop the receiver
 
@@ -134,17 +153,44 @@ Tick stream
 | Local forwarder | Forward raw payloads to the receiver | `chrome-extension/content.js` |
 | Receiver | Validate, buffer, and log ticks | `receiver.py` |
 | Asset map | Map `active_id` to display names | `asset_names.json` |
-| Candle builder | Aggregate ticks into 1-minute OHLCV | Planned |
-| TPO/feature engine | Compute POC/VAH/VAL and AMT features | Planned |
+| Candle bucketing | Group ticks into whole-minute candles | `amt/timeframes.py` (offline) |
+| TPO/profile engine | Compute POC/VAH/VAL, excess, tails | `amt/profile.py` (offline) |
+| Feature engine | Build `amt-v2` rows, one per tick | `amt/features.py` (offline) |
+| Label builder | 60/90/120/180s tick-horizon labels | `amt/labels.py` (offline) |
 | Model service | Train, calibrate, and serve models | Planned |
 | Risk manager | Stake sizing, limits, kill switch | Planned |
 | Execution adapter | Paper, demo, and live orders | Planned |
+
+"Offline" means implemented and tested as a library, but not yet wired to the live receiver.
 
 ---
 
 ## 5. Configuration
 
-There is no config file yet. Current constants live in code.
+Receiver constants still live in code. The AMT pipeline reads `config/default.toml`.
+
+### `config/default.toml`
+
+| Section | Key | Default | Description |
+|---------|-----|---------|-------------|
+| `instrument` | `symbol` | `EURUSD` | Active instrument display name |
+| `instrument` | `active_id` | `0` | Active instrument key |
+| `instrument` | `pip_size` | `0.0001` | Pip size |
+| `instrument` | `bin_size` | `0.00005` | TPO profile bin size |
+| `candles` | `interval_seconds` | `60` | Candle bucket size |
+| `context` | `macro_candles` | `7` | Completed candles in the macro window |
+| `context` | `fast_candles` | `3` | Completed candles in the fast window |
+| `context` | `profile_min_ticks` | `30` | Minimum ticks for a non-null profile |
+| `context` | `value_area_target` | `0.70` | Value Area share |
+| `context` | `tail_bins` | `3` | Bins inspected per tail |
+| `context` | `single_print_max_ticks` | `1` | Tick count treated as a single print |
+| `context` | `volatility_min_changes` | `10` | Minimum price changes for `sigma_7` |
+| `labels` | `horizons_seconds` | `[60, 90, 120, 180]` | Prediction horizons |
+| `labels` | `exit_tolerance_seconds` | `5.0` | Exit match tolerance |
+| `labels` | `tie_policy` | `exclude` | `exclude` or `keep` |
+| `data` | `input_path` | `data/ticks.csv` | Default tick input |
+| `data` | `features_path` | `data/features.csv` | Default feature output |
+| `data` | `labels_path` | `data/labels.csv` | Default label output |
 
 ### `receiver.py`
 
@@ -163,7 +209,7 @@ There is no config file yet. Current constants live in code.
 | `RECONNECT_DELAY_MS` | `2000` | Reconnect delay |
 | `MAX_QUEUED_MESSAGES` | `500` | Queue limit; oldest dropped when full |
 
-Planned configuration is specified in [`docs/system/03_CONFIGURATION.md`](docs/system/03_CONFIGURATION.md).
+Planned receiver and execution configuration is specified in [`docs/system/03_CONFIGURATION.md`](docs/system/03_CONFIGURATION.md).
 
 ---
 
@@ -203,14 +249,28 @@ Planned configuration is specified in [`docs/system/03_CONFIGURATION.md`](docs/s
 | 2026-11-18 | Rule-based AMT baseline before ML | Establishes a performance floor and sanity check |
 | 2026-11-18 | Paper/demo before live execution | Real-money automation requires tested risk controls and a kill switch |
 | 2026-11-18 | Payout-aware evaluation is mandatory | Accuracy below the payout breakeven loses money |
+| 2026-11-18 | One timestamp per tick: local receipt time with offset | Removes the unverified `at` ambiguity and keeps ordering local and explicit |
+| 2026-11-18 | One active instrument at a time | Simplifies storage, features, and validation; multi-instrument is a future item |
+| 2026-11-18 | Predictions are tick-based at 60/90/120/180s | Binary options allow arbitrary entry; candles are context, not decision points |
+| 2026-11-18 | Macro 7 / fast 3 / forming context layers | Compares current activity against recent and slower context without fixed short windows |
+| 2026-11-18 | `sigma_7` from tick price changes over completed candles | Matches the normalisation window and stays in price units |
+| 2026-11-18 | Profile from the last 7 completed candles | Keeps the forming candle out of value until it completes |
+| 2026-11-18 | Value Area expands in pairs over non-empty bins | Prevents empty edge bins from distorting VAH/VAL |
+| 2026-11-18 | Drop exact duplicate `(timestamp, price)` ticks | Prevents inflated tick density |
+| 2026-11-18 | The offline `amt` package is canonical; the external sample is a reference | The sample mixed features, labels, and a weak backtest and violated several specs |
+| 2026-11-18 | Remove `sources/` and `scripts/` after absorption | Raw inputs and scaffold validators are preserved in git history |
 
 ### Known Limitations
 
-- Tick cadence, `at` semantics, and completeness are not yet verified.
+- Tick cadence, frame semantics, and completeness are not yet verified.
+- The receiver does not record receipt time yet; the offline pipeline assumes it exists.
 - The receiver buffer is in memory and holds only 500 raw messages per `active_id`.
-- No raw tick persistence, candle aggregation, AMT features, ML, or execution exists.
+- No raw tick persistence, live candle store, or replay exists.
+- The `amt` package is offline only and has no live receiver integration.
+- The feature build loops per tick and is not yet vectorised or incremental.
+- No labels join, model, calibration, backtest, risk, or execution exists.
 - The extension can drop the oldest queued message while disconnected.
-- The current tests cover only a small part of the receiver.
+- Tests cover the receiver and the `amt` package, but not live-to-offline parity.
 
 See [`docs/system/10_LIMITATIONS_AND_BACKLOG.md`](docs/system/10_LIMITATIONS_AND_BACKLOG.md).
 
@@ -265,9 +325,11 @@ No features have been removed yet.
 10. **No lookahead** — feature and label code must be causal by construction.
 11. **No secrets in the repo** — `.env` and credentials stay local.
 12. **No live execution without the gate** — see `docs/system/09_MODEL_VALIDATION.md`.
-13. **Keep scaffold-time tools out of the merged repo** — `prompt.md`, `extract.md`, `MERGE_BACK.md`, `HOW_TO.md`, and `profiles/` are not project docs.
-14. **`sources/` is frozen** — do not edit raw inputs; synthesize changes into `docs/`.
-15. **Run the docs validator after structural changes** — `scripts/validate_scaffold.ps1` on Windows.
+13. **Keep scaffold-time tools and removed inputs out of the repo** — `prompt.md`, `extract.md`, `MERGE_BACK.md`, `HOW_TO.md`, and `profiles/` are not project docs; do not recreate `sources/` or `scripts/` either.
+14. **Raw inputs live in git history** — synthesize future changes into `docs/`.
+15. **Run the AMT tests after changing `amt/`** — `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v`.
+16. **Use the documentation checklist** — `docs/system/05_TESTING.md` replaces the removed scaffold validator.
+17. **Never map a tie or missing exit to a direction** — keep both explicit and unusable for directional training.
 
 ---
 
@@ -279,9 +341,12 @@ No features have been removed yet.
 | 2026-11-18 | Documented the current tick-capture PoC and separated it from the target bot | Documentation agent |
 | 2026-11-18 | Added tick stream, candle aggregation, AMT, ML, validation, and backlog docs | Documentation agent |
 | 2026-11-18 | Added the phased roadmap, improvement backlog, and go/no-go gate | Documentation agent |
+| 2026-11-18 | Locked one local receipt timestamp, one active instrument, tick-based horizons, and the 7/3/forming context model | Documentation agent |
+| 2026-11-18 | Added the offline `amt` package with `amt-v2` features and `tick-horizon-v1` labels, plus 36 unit tests | Implementation agent |
+| 2026-11-18 | Removed `sources/` and `scripts/`; replaced the scaffold validator with a documented checklist | Documentation agent |
 
 ---
 
 ## 10. Last Updated
 
-**2026-11-18 by Documentation agent**
+**2026-11-18 by Documentation and Implementation agents**

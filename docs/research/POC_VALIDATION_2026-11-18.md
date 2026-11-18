@@ -80,7 +80,7 @@ The next step is Phase 1 hardening, not modelling. See [Phase 1](../planning/pha
 - [Tick stream contract](../data/01_TICK_STREAM.md)
 - [System overview](../system/01_OVERVIEW.md)
 - [Limitations and backlog](../system/10_LIMITATIONS_AND_BACKLOG.md)
-- [Interview transcript](../../sources/INTERVIEW_TRANSCRIPT.md)
+- [AMT reference implementation review](AMT_REFERENCE_IMPLEMENTATION_2026-11-18.md)
 
 ---
 

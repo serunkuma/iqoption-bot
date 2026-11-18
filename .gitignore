@@ -20,6 +20,7 @@ htmlcov/
 logs/
 
 # Local data and generated artifacts
+data/
 reports/
 models/
 *.sqlite

@@ -10,12 +10,12 @@ Status: Planning
 
 ### Stage 1 — Market State Gate
 
-Classify the market at decision time `t` as:
+Classify each tick at entry time `t` as:
 
 | State | Rule-based definition |
 |-------|-----------------------|
-| Balance | Price inside `[VAL, VAH]` and not initiative |
-| Imbalance | Price outside `[VAL, VAH]` with initiative velocity |
+| Balance | Price inside `[VAL, VAH]` and forming activity is not elevated |
+| Imbalance | Price outside `[VAL, VAH]` with elevated forming activity in the breakout direction |
 | Ambiguous | Neither condition is clear |
 
 Initial implementation:
@@ -24,7 +24,21 @@ Initial implementation:
 - No ML required for Stage 1 at first.
 - A predictive classifier may be added later to forecast the next-state regime.
 
-The gate must be causal. It may not use the outcome candle.
+Worked rule:
+
+```text
+forming_activity = mean(price_speed_forming_3, tick_rate_forming_3, range_forming_3)
+elevated         = forming_activity >= forming_activity_threshold
+
+balance    = inside_va == 1 and not elevated
+imbalance  = inside_va == 0 and elevated
+              and sign(price - POC) == sign(price_change_forming)
+ambiguous  = otherwise
+```
+
+`forming_activity_threshold` is a configuration value, initially a fixed quantile of the training window. It must not be tuned on the test set.
+
+The gate must be causal. It may not use any later tick or the outcome.
 
 ### Stage 2 — Conditional Directional Models
 
@@ -34,29 +48,31 @@ The gate must be causal. It may not use the outcome candle.
 | Imbalance model | Rows labelled `imbalance` | Continuation in the breakout direction |
 | No-trade | Ambiguous, missing data, or low confidence | Abstain |
 
+The initial version trains a separate model per horizon (60, 90, 120, 180 seconds) for each regime. A shared model with the horizon as a feature is a later experiment and must beat the per-horizon baseline to replace it.
+
 Each model outputs a calibrated probability for the chosen direction, or a no-trade decision.
 
 ### Architecture
 
 ```text
-Tick + candle + metadata
+Tick + completed candles + forming candle + metadata
         │
         ▼
-Feature snapshot (amt-v1)
+Feature snapshot (amt-v2, one row per tick)
         │
         ▼
 Stage 1: regime gate
-   ├── balance ──► Balance model ──┐
-   ├── imbalance ─► Imbalance model ─┤
-   └── ambiguous ────────────────────┤
-                                     ▼
-                          Calibrated probability
-                                     │
-                                     ▼
-                          EV threshold + risk check
-                                     │
-                                     ▼
-                          Call / Put / No-Trade
+   ├── balance ──► Balance model per horizon ──┐
+   ├── imbalance ─► Imbalance model per horizon ─┤
+   └── ambiguous ────────────────────────────────┤
+                                                 ▼
+                                      Calibrated probability
+                                                 │
+                                                 ▼
+                                      EV threshold + risk check
+                                                 │
+                                                 ▼
+                                      Call / Put / No-Trade
 ```
 
 ---
@@ -120,27 +136,39 @@ The baseline provides:
 
 1. Build a versioned dataset: features, labels, metadata, quality flags.
 2. Split chronologically into train, validation, and test.
-3. Purge and embargo rows near split boundaries to prevent label overlap.
-4. Train the balance and imbalance models separately.
+3. Purge rows whose label window crosses a split boundary; embargo a configurable period after each split.
+4. Train the balance and imbalance models separately for each horizon.
 5. Calibrate probabilities on a held-out calibration set.
 6. Evaluate with the metrics in [Model Validation](09_MODEL_VALIDATION.md).
 7. Register the model artifact with feature and label versions.
 8. Only deploy if the validation gate passes.
 
+Rows are ticks, so adjacent rows are highly correlated and label windows overlap. Training must not treat row count as independent sample size. Purging, embargo, and per-fold reporting are mandatory.
+
+### Empty or One-Class Regimes
+
+A regime subset can be empty or contain a single class. In that case:
+
+- Skip the model and record the reason.
+- Never fabricate a probability.
+- Never silently train on the other regime's rows.
+
+The validation report must state which regime/horizon models were skipped.
+
 ---
 
 ## Inference Workflow
 
-1. Receive a complete feature snapshot at decision time.
+1. Receive a complete feature snapshot for an accepted tick.
 2. Check feature version and model version compatibility.
 3. Run the Stage 1 gate.
-4. Run the appropriate Stage 2 model.
+4. Run the appropriate Stage 2 model for the chosen horizon.
 5. Calibrate or verify calibration.
-6. Compute EV using the current payout.
+6. Compute EV using the current payout for that horizon.
 7. Apply the no-trade threshold and risk checks.
-8. Emit a signal with model version and reason.
+8. Emit a signal with model version, horizon, and reason.
 
-If any step fails, emit no-trade.
+If any step fails, emit no-trade. A structural guardrail must produce an explicit no-trade reason code, not overwrite the probability.
 
 ---
 

@@ -18,6 +18,27 @@ That framing is useful because it separates market context from direction. The s
 
 ---
 
+## Core Hypothesis
+
+The project's working hypothesis has three context layers:
+
+| Layer | Window | Role |
+|-------|--------|------|
+| Macro value | Last 7 completed 1-minute candles | Defines POC, VAH, VAL, and the volatility used to normalise distance |
+| Fast context | Last 3 completed 1-minute candles | Shows whether recent activity is faster or slower than the macro window |
+| Forming candle | Ticks in the current minute | Current price, tick rate, price speed, and range |
+
+In one sentence: **time-at-price defines value, and the rate at which price leaves value separates initiative from responsive behaviour.**
+
+Two consequences shape the whole design:
+
+1. **Predictions are per tick.** Binary options allow entry at any moment, so every accepted tick is a potential decision point. The 60/90/120/180-second horizons are measured from that tick.
+2. **Candles are context, not decisions.** Candles bucket the stream so the macro, fast, and forming layers can be compared. The forming candle contributes current activity but never enters the profile until it completes.
+
+Activity is compared across the three layers rather than through fixed short windows: tick rate, price speed, and range for each layer, plus ratios between them.
+
+---
+
 ## Core Concepts
 
 | Concept | Meaning in this project |
@@ -42,8 +63,7 @@ AMT was developed for auction markets with observable volume and order-book dept
 
 The feed provides:
 
-- Price updates.
-- Timestamps from the broker, with unverified semantics.
+- Price updates with one timestamp: the receiver's local receipt time.
 - OHLCV-shaped payload fields.
 - No trusted traded volume.
 - No Level 2 depth.
@@ -66,9 +86,9 @@ The project translates AMT into measurable features:
 |----------|----------------|
 | Where is value? | Rolling POC, VAH, VAL, value-area width |
 | How far is price from value? | `Z_POC`, `Z_VAH`, `Z_VAL`, normalized by volatility |
-| Was a level accepted or rejected? | Excess ratio, single-print count, tail length |
-| Is activity initiative or responsive? | Tick velocity, acceleration, boundary-cross behaviour |
-| Is the market balanced or imbalanced? | Regime gate from price position and velocity |
+| Was a level accepted or rejected? | Excess ratio, single-print tail count, tail length |
+| Is activity initiative or responsive? | Tick rate, price speed, and range across macro, fast, and forming layers |
+| Is the market balanced or imbalanced? | Regime gate from price position and layer activity |
 
 Exact definitions live in [TPO and Value Area](../data/04_TPO_VALUE_AREA.md) and [AMT Feature Specification](../data/05_AMT_FEATURE_SPEC.md).
 
@@ -112,7 +132,7 @@ See [AMT on OTC](../research/AMT_ON_OTC.md).
 ## Design Principles
 
 1. **Causal by construction.** Every feature uses only data available at the decision time.
-2. **Ticks first, candles second.** TPO/Value Area is computed from ticks; candles are for labels and context.
+2. **Ticks first, candles second.** TPO/Value Area is computed from the macro tick window; candles provide context layers, not decision points.
 3. **One definition per feature.** No duplicate formulas in code and docs.
 4. **Payout-aware evaluation.** A model that is accurate but below the payout breakeven loses money.
 5. **No silent data loss.** Gaps, duplicates, and reconnects are recorded, not hidden.

@@ -1,8 +1,8 @@
 # AMT Feature Specification
 
-Status: Planning
+Status: Current
 
-> This document defines the exact feature families and formulas for the AMT model. Every feature must be computable causally at the decision timestamp. It is not implemented yet.
+> This document defines the exact AMT feature families and formulas. The offline feature engine in `amt/features.py` implements `amt-v2`; live receiver integration is not built yet. Every feature is computable causally from one timestamp per tick.
 
 ---
 
@@ -11,148 +11,167 @@ Status: Planning
 | Symbol | Meaning |
 |--------|---------|
 | `P_t` | Current tick price at decision time `t` |
-| `POC` | Point of Control from the rolling profile |
+| `k` | Number of completed 1-minute candles since capture start |
+| `POC` | Point of Control from the macro profile |
 | `VAH` | Value Area High |
 | `VAL` | Value Area Low |
-| `sigma_t` | Rolling volatility in price units |
-| `W` | Profile/volatility window, e.g. 15 or 30 minutes |
-| `V` | Short velocity window, e.g. 30 seconds |
+| `sigma_7` | Rolling volatility in price units over the macro window |
 
-### Volatility Definition
+---
+
+## Context Windows
+
+Ticks carry one timestamp: the receiver's local receipt time, stored as ISO 8601 with an offset. All windows are measured in absolute time, so whole-minute buckets coincide with whole local minutes.
+
+| Window | Definition | Role |
+|--------|------------|------|
+| Macro | Last `macro_candles` completed candles (default 7) | Profile, `sigma_7`, slow activity |
+| Fast | Last `fast_candles` completed candles (default 3) | Recent activity |
+| Forming | Ticks in the current, incomplete candle | Current price, immediate activity |
+
+The forming candle **never** enters the profile. It contributes current price, tick rate, price speed, and range only.
+
+For each layer `L`, with `duration_L` measured from the start of the oldest candle in the layer to the start of the forming candle:
 
 ```text
-sigma_t = standard_deviation(P_i - P_{i-1} for the last N completed 1-minute candles)
+tick_rate_L     = ticks_L / duration_L
+price_change_L  = last_price_L - first_price_L
+price_speed_L   = abs(price_change_L) / duration_L
+range_L         = max_price_L - min_price_L
+range_speed_L   = range_L / duration_L
+```
+
+For the forming layer:
+
+```text
+duration_forming = max(t - start_of_current_candle, 1 second)
+```
+
+---
+
+## Volatility Definition
+
+```text
+sigma_7 = sample_standard_deviation(
+    consecutive tick price differences over the macro window
+)
 ```
 
 Requirements:
 
-- Use completed 1-minute candles only.
-- Minimum of 10 candles; otherwise emit `null`.
-- Do not annualise.
-- The same `sigma_t` is used for all normalised distance features at time `t`.
+- The macro window contains ticks from completed candles only.
+- At least `volatility_min_changes` price differences are required (default 10).
+- `sigma_7` must be finite and greater than zero; otherwise it is null.
+- Do not annualise and do not use candle closes.
 
-An ATR-based alternative may be added later, but it must be a separate feature version.
+At the start of capture, before enough history exists, `sigma_7` is null. All normalised distance features are then null.
 
 ---
 
 ## Feature Family 1 — Normalised Distance to Value
 
 ```text
-Z_POC = (P_t - POC) / sigma_t
-Z_VAH = (P_t - VAH) / sigma_t
-Z_VAL = (P_t - VAL) / sigma_t
+z_poc = (P_t - POC) / sigma_7
+z_vah = (P_t - VAH) / sigma_7
+z_val = (P_t - VAL) / sigma_7
 ```
-
-Interpretation:
 
 | Feature | Positive value means | Negative value means |
 |---------|----------------------|----------------------|
-| `Z_POC` | Price above value centre | Price below value centre |
-| `Z_VAH` | Price above value area | Price inside/below VAH |
-| `Z_VAL` | Price above VAL | Price below value area |
+| `z_poc` | Price above value centre | Price below value centre |
+| `z_vah` | Price above value area | Price inside or below VAH |
+| `z_val` | Price above VAL | Price below value area |
 
 Related features:
 
 ```text
-inside_va        = 1 if VAL <= P_t <= VAH else 0
-va_width         = VAH - VAL
-va_width_norm    = va_width / sigma_t
-poc_position     = (POC - VAL) / (VAH - VAL)
-edge_proximity   = min(P_t - VAL, VAH - P_t) / sigma_t
+inside_va      = 1 if VAL <= P_t <= VAH else 0
+va_width_norm  = (VAH - VAL) / sigma_7
+poc_position   = (POC - VAL) / (VAH - VAL)
+edge_proximity = min(P_t - VAL, VAH - P_t) / sigma_7
 ```
 
-`poc_position` is in `[0, 1]` because POC lies inside the value area.
+`poc_position` is in `[0, 1]`. `edge_proximity` is negative outside the value area, which is intentional.
 
 ---
 
-## Feature Family 2 — Excess and Single Prints
+## Feature Family 2 — Excess and Tails
 
-A single print is a price bin at the extreme of the profile with very few ticks and a much denser neighbouring bin. It represents rejection: price moved through the level quickly rather than accepting it.
-
-### Definitions
+A single print is a price bin at the extreme of the profile with very few ticks. It represents rejection: price moved through the level quickly instead of accepting it.
 
 ```text
-single_print_max_ticks = 1        # configurable
-acceptance_min_ticks   = 3        # configurable
-tail_bins              = 3        # number of extreme bins inspected
+single_print_max_ticks = 1
+tail_bins              = 3
 ```
 
 For the top tail:
 
 ```text
-high_tail = the highest `tail_bins` non-empty bins in the profile
+high_tail          = highest `tail_bins` non-empty bins
 high_single_prints = count of high_tail bins with count <= single_print_max_ticks
-high_tail_ticks = sum of counts in high_tail
-excess_high = high_single_prints / max(high_tail_ticks, 1)
+high_tail_ticks    = sum of counts in high_tail
+excess_high        = high_single_prints / max(high_tail_ticks, 1)
 ```
 
 For the bottom tail:
 
 ```text
-low_tail = the lowest `tail_bins` non-empty bins in the profile
+low_tail          = lowest `tail_bins` non-empty bins
 low_single_prints = count of low_tail bins with count <= single_print_max_ticks
-low_tail_ticks = sum of counts in low_tail
-excess_low = low_single_prints / max(low_tail_ticks, 1)
+low_tail_ticks    = sum of counts in low_tail
+excess_low        = low_single_prints / max(low_tail_ticks, 1)
 ```
 
 Additional features:
 
 ```text
-tail_length_high = (highest_included_bin - VAH_bin) / 1
-tail_length_low  = (VAL_bin - lowest_included_bin) / 1
 excess_asymmetry = excess_high - excess_low
+tail_length_high = highest_non_empty_bin - VAH_bin
+tail_length_low  = VAL_bin - lowest_non_empty_bin
 ```
 
 `tail_length_*` is measured in bins, not price units, so it is comparable across instruments with different pip sizes.
 
+The global ratio of single-tick bins to all bins is a diagnostic only. It is not a tail feature and must not replace `excess_high` or `excess_low`.
+
 ---
 
-## Feature Family 3 — Tick Velocity and Initiative
+## Feature Family 3 — Layer Activity
 
-### Tick rate
+Every layer produces the same five metrics. Ratios compare fast to macro and forming to fast.
 
-```text
-tick_rate_short = ticks in [t - 30s, t] / 30
-tick_rate_long  = ticks in [t - 300s, t] / 300
-tick_accel      = tick_rate_short / max(tick_rate_long, epsilon)
-median_dt       = median inter-tick interval in [t - 60s, t]
-```
+| Feature | Definition |
+|---------|------------|
+| `tick_rate_7` | Ticks per second over the macro window |
+| `tick_rate_3` | Ticks per second over the fast window |
+| `tick_rate_forming` | Ticks per second in the forming candle |
+| `price_change_7` | Last minus first price in the macro window |
+| `price_change_3` | Last minus first price in the fast window |
+| `price_change_forming` | Current price minus first price in the forming candle |
+| `price_speed_7` | `abs(price_change_7) / duration_7` |
+| `price_speed_3` | `abs(price_change_3) / duration_3` |
+| `price_speed_forming` | `abs(price_change_forming) / duration_forming` |
+| `range_7` | High minus low in the macro window |
+| `range_3` | High minus low in the fast window |
+| `range_forming` | High minus low in the forming candle |
+| `range_speed_7` | `range_7 / duration_7` |
+| `range_speed_3` | `range_3 / duration_3` |
+| `range_speed_forming` | `range_forming / duration_forming` |
 
-### Boundary crossing
-
-A boundary crossing is detected when price moves from inside the value area to outside it:
-
-```text
-crossed_vah_up   = previous_price < VAH and P_t > VAH
-crossed_val_down = previous_price > VAL and P_t < VAL
-```
-
-At the crossing, record:
-
-```text
-cross_velocity = tick_rate_short at the crossing
-cross_distance = abs(P_t - boundary) / sigma_t
-```
-
-### Regime features
+Ratios:
 
 ```text
-initiative = 1 if outside_va and tick_rate_short > rolling_80pct(tick_rate_short)
-                 and cross_distance >= 0.5 * sigma_t
-responsive = 1 if boundary_touched and price_returned_inside_within_N_ticks
+tick_rate_3_7          = tick_rate_3 / tick_rate_7
+tick_rate_forming_3    = tick_rate_forming / tick_rate_3
+price_speed_3_7        = price_speed_3 / price_speed_7
+price_speed_forming_3  = price_speed_forming / price_speed_3
+range_3_7              = range_3 / range_7
+range_forming_3        = range_forming / range_3
 ```
 
-Default `N = 5` ticks.
+A ratio is null when its denominator is null, zero, or negative. Ratios are not clipped.
 
-### Regime label
-
-```text
-regime = "balance"    if inside_va and not initiative
-       = "imbalance"  if outside_va and initiative
-       = "ambiguous"  otherwise
-```
-
-`ambiguous` rows are excluded from directional training by default, but retained for diagnostics.
+There are no fixed 5-second, 30-second, or 300-second velocity windows. Activity is always compared across the macro, fast, and forming layers.
 
 ---
 
@@ -160,16 +179,12 @@ regime = "balance"    if inside_va and not initiative
 
 | Feature | Definition |
 |---------|------------|
-| `time_sin` | `sin(2 * pi * seconds_since_midnight / 86400)` |
-| `time_cos` | `cos(2 * pi * seconds_since_midnight / 86400)` |
-| `day_of_week` | `0`–`6`, Monday = 0 |
-| `is_weekend` | `1` if Saturday or Sunday in the configured session timezone |
-| `asset_type` | Categorical: forex, forex_otc, crypto, index, commodity, stock |
-| `session` | Categorical: asia, london, newyork, overlap, off_hours |
-| `tick_rate_short` | From Family 3 |
-| `volatility_regime` | Low/normal/high from `sigma_t` quantiles |
+| `time_sin` | `sin(2 * pi * seconds_since_local_midnight / 86400)` |
+| `time_cos` | `cos(2 * pi * seconds_since_local_midnight / 86400)` |
+| `day_of_week` | `0`–`6`, Monday = 0, from the tick's local timestamp |
+| `is_weekend` | `1` if `day_of_week >= 5` |
 
-Time must be computed in the configured session timezone, not the machine's local timezone.
+Time features use the tick's own local timestamp. They do not convert to a session timezone.
 
 ---
 
@@ -177,42 +192,48 @@ Time must be computed in the configured session timezone, not the machine's loca
 
 | Name | Type | Formula / source |
 |------|------|------------------|
-| `Z_POC` | float | `(P_t - POC) / sigma_t` |
-| `Z_VAH` | float | `(P_t - VAH) / sigma_t` |
-| `Z_VAL` | float | `(P_t - VAL) / sigma_t` |
-| `inside_va` | int | `VAL <= P_t <= VAH` |
-| `va_width_norm` | float | `(VAH - VAL) / sigma_t` |
-| `poc_position` | float | `(POC - VAL) / (VAH - VAL)` |
-| `edge_proximity` | float | `min(P_t - VAL, VAH - P_t) / sigma_t` |
-| `excess_high` | float | Top-tail single-print ratio |
-| `excess_low` | float | Bottom-tail single-print ratio |
-| `excess_asymmetry` | float | `excess_high - excess_low` |
-| `tail_length_high` | float | Bins above VAH |
-| `tail_length_low` | float | Bins below VAL |
-| `tick_rate_short` | float | Ticks per second, 30-second window |
-| `tick_rate_long` | float | Ticks per second, 5-minute window |
-| `tick_accel` | float | Short rate / long rate |
-| `median_dt` | float | Median seconds between ticks |
-| `initiative` | int | Rule-based flag |
-| `responsive` | int | Rule-based flag |
-| `regime` | category | `balance`, `imbalance`, `ambiguous` |
+| `tick_id` | int | Row ordinal in the sorted tick stream |
+| `timestamp` | string | Tick receipt time, ISO 8601 with offset |
+| `active_id` | int or null | Instrument key |
+| `price` | float | `P_t` |
+| `feature_version` | string | `amt-v2` |
+| `poc` | float or null | POC bin midpoint |
+| `vah` | float or null | Upper edge of the highest included bin |
+| `val` | float or null | Lower edge of the lowest included bin |
+| `profile_ticks` | int | Ticks in the macro window |
+| `sigma_7` | float or null | Rolling volatility |
+| `z_poc` | float or null | `(P_t - POC) / sigma_7` |
+| `z_vah` | float or null | `(P_t - VAH) / sigma_7` |
+| `z_val` | float or null | `(P_t - VAL) / sigma_7` |
+| `inside_va` | int or null | `VAL <= P_t <= VAH` |
+| `va_width_norm` | float or null | `(VAH - VAL) / sigma_7` |
+| `poc_position` | float or null | `(POC - VAL) / (VAH - VAL)` |
+| `edge_proximity` | float or null | `min(P_t - VAL, VAH - P_t) / sigma_7` |
+| `excess_high` | float or null | Top-tail single-print ratio |
+| `excess_low` | float or null | Bottom-tail single-print ratio |
+| `excess_asymmetry` | float or null | `excess_high - excess_low` |
+| `tail_length_high` | float or null | Bins above VAH |
+| `tail_length_low` | float or null | Bins below VAL |
+| all `*_7`, `*_3`, `*_forming` | float or null | Layer activity metrics |
+| all `*_3_7`, `*_forming_3` | float or null | Layer ratios |
 | `time_sin` | float | Cyclical time encoding |
 | `time_cos` | float | Cyclical time encoding |
-| `day_of_week` | int | Session timezone |
-| `is_weekend` | int | Session timezone |
-| `asset_type` | category | Metadata |
-| `session` | category | Session classifier |
+| `day_of_week` | int | Local timestamp |
+| `is_weekend` | int | Local timestamp |
+| `profile_missing` | int | `1` when the profile is null |
+| `volatility_missing` | int | `1` when `sigma_7` is null |
+| `insufficient_ticks` | int | `1` when the window has ticks but fewer than `profile_min_ticks` |
+| `gap_in_window` | int | `1` when the macro window skips a whole minute |
 
 ---
 
 ## Causal Rules
 
-1. A feature snapshot at time `t` may use only ticks with `received_at <= t`.
-2. The profile window is `[t - W, t]`.
-3. Velocity windows end at `t`.
-4. `sigma_t` uses completed candles ending at or before `t`.
-5. No feature may use the outcome candle or any later tick.
-6. Feature computation for training and inference must share the same code path and version.
+1. A feature snapshot at time `t` may use only ticks with timestamp `<= t`.
+2. The profile and `sigma_7` use completed candles only.
+3. The forming candle contributes only `P_t` and forming-layer activity.
+4. No feature may use any tick after `t`.
+5. Feature computation for training and inference must share the same code path and version.
 
 ---
 
@@ -220,29 +241,44 @@ Time must be computed in the configured session timezone, not the machine's loca
 
 | Situation | Output |
 |-----------|--------|
-| Fewer than minimum profile ticks | All profile features `null`; `profile_missing = 1` |
-| Fewer than minimum volatility candles | `sigma_t = null`; all `Z_*` features `null` |
-| No ticks in velocity window | `tick_rate_short = 0`; `median_dt = null` |
-| Unknown asset metadata | `asset_type = "unknown"`; flag `metadata_missing = 1` |
-| Gap in window | Compute with available ticks; set `gap_in_window = 1` |
+| No completed candles | All profile and macro/fast features null; `profile_missing = 1` |
+| Fewer than `profile_min_ticks` | Profile features null; `profile_missing = 1`; `insufficient_ticks = 1` if ticks exist |
+| Fewer than `volatility_min_changes` price changes | `sigma_7 = null`; `volatility_missing = 1`; all `z_*` and normalised width features null |
+| `sigma_7 <= 0` | Treated as missing volatility |
+| Zero denominator in a ratio | Ratio null |
+| Gap in the macro window | Compute with available candles; `gap_in_window = 1` |
 
-Do not impute missing values with future data. Models must handle nulls explicitly or rows must be excluded.
+Missing values are never imputed from future data and never replaced with the current price.
 
 ---
 
 ## Feature Versioning
 
-The feature set is versioned, for example `amt-v1`.
+The current feature set is `amt-v2`. A new version is required when:
 
-A new version is required when:
-
-- Bin size or window length changes.
-- `sigma_t` definition changes.
-- Value-area expansion changes.
+- `macro_candles`, `fast_candles`, or the candle interval changes.
+- Bin size, `sigma_7`, or value-area expansion changes.
 - A feature is added, removed, or redefined.
-- Session timezone changes.
+- The definition of a layer or ratio changes.
 
-Every stored feature row must record `feature_version`.
+`amt-v1` was the pre-implementation draft with fixed velocity windows and candle-close `sigma_t`. It is superseded.
+
+---
+
+## Implementation Reference
+
+| Item | Location |
+|------|----------|
+| Window and layer logic | `amt/features.py` |
+| TPO profile | `amt/profile.py` |
+| Candle bucketing | `amt/timeframes.py` |
+| Configuration | `config/default.toml`, `amt/config.py` |
+| Tests | `tests/test_features.py`, `tests/test_profile.py`, `tests/test_timeframes.py` |
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t .
+.\.venv\Scripts\python.exe -m amt.build --input data\ticks.csv
+```
 
 ---
 
@@ -250,7 +286,7 @@ Every stored feature row must record `feature_version`.
 
 - [TPO and Value Area](04_TPO_VALUE_AREA.md)
 - [Tick stream contract](01_TICK_STREAM.md)
-- [Labels, payouts, and expected value](06_LABELS_PAYOUTS_AND_EV.md)
+- [Labels and expected value](06_LABELS_PAYOUTS_AND_EV.md)
 - [Auction Market Theory](../concepts/05_AUCTION_MARKET_THEORY.md)
 - [ML pipeline](../system/08_ML_PIPELINE.md)
 

@@ -13,15 +13,17 @@ Status: Planning
 | Capture | Browser WebSocket frame | Raw JSON frame | Current |
 | Validate | Raw frame | Accepted or rejected tick event | Partial |
 | Persist | Accepted tick event | JSONL raw log; later SQLite/Parquet | Planned |
-| Aggregate | Tick events | 1-minute OHLCV candles | Planned |
-| Profile | Tick events | POC, VAH, VAL, value-area metrics | Planned |
-| Feature | Profile, ticks, candles, metadata | Feature snapshot | Planned |
-| Label | Candles, metadata | Binary outcome and payout-aware EV | Planned |
+| Aggregate | Tick events | 1-minute OHLCV candles | Offline |
+| Profile | Macro-window ticks | POC, VAH, VAL, value-area metrics | Offline |
+| Feature | Profile, ticks, candles, metadata | Feature snapshot, one row per tick | Offline |
+| Label | Ticks, metadata | Tick-horizon direction labels | Offline |
 | Dataset | Features + labels + metadata | Versioned dataset | Planned |
 | Train | Dataset | Model artifact | Planned |
 | Infer | Live features + model | Signal | Planned |
 | Execute | Signal + risk decision | Paper/demo/live order | Planned |
 | Journal | Order and outcome | Trade record | Planned |
+
+"Offline" means implemented in the `amt/` package and tested, but not yet fed by the live receiver.
 
 ---
 
@@ -37,26 +39,31 @@ Browser WebSocket
 [Validate] receiver.py
     │  JSON, envelope, active_id, numeric price
     ▼
-[Persist] raw ticks (JSONL)
+[Persist] raw ticks (JSONL, one local receipt timestamp)
     │
-    ├──────────────► [Profile] TPO/Value Area from ticks
-    │                       │
-    │                       ▼
-    │                [Feature engine] ──┐
-    │                                   │
-    ▼                                   │
-[Aggregate] 1-minute candles ──► [Label builder]
-    │                                   │
-    └──────────────► [Dataset builder] ◄┘
-                            │
-                            ▼
-                     [Train / validate]
-                            │
-                            ▼
-                     [Model registry]
-                            │
-                            ▼
-                     [Inference] → [Signal] → [Risk] → [Execution]
+    ▼
+[Aggregate] 1-minute candles
+    │
+    ├──► macro window: last 7 completed candles ──► [Profile] POC / VAH / VAL
+    │                                               [Volatility] sigma_7
+    │
+    ├──► fast window: last 3 completed candles ───┐
+    │                                              │
+    ├──► forming candle: current-minute ticks ────┤
+    │                                              ▼
+    │                                    [Feature engine] one row per tick
+    │                                              │
+    ▼                                              ▼
+[Label builder] tick horizons 60/90/120/180 ─► [Dataset builder]
+                                                   │
+                                                   ▼
+                                            [Train / validate]
+                                                   │
+                                                   ▼
+                                            [Model registry]
+                                                   │
+                                                   ▼
+                                     [Inference] → [Signal] → [Risk] → [Execution]
 ```
 
 ---
@@ -84,12 +91,12 @@ data/
 ├── candles/
 │   └── candles.sqlite
 ├── features/
-│   └── amt-v1/
+│   └── amt-v2/
 │       └── features-2026-11-18.parquet
 ├── labels/
-│   └── next-close-v1/
+│   └── tick-horizon-v1/
 ├── datasets/
-│   └── amt-v1_next-close-v1_2026-11-18.parquet
+│   └── amt-v2_tick-horizon-v1_2026-11-18.parquet
 ├── models/
 │   └── model-2026-11-18/
 └── journals/
@@ -106,15 +113,15 @@ Every derived artifact records:
 
 | Field | Example |
 |-------|---------|
-| `feature_version` | `amt-v1` |
-| `label_version` | `next-close-v1` |
+| `feature_version` | `amt-v2` |
+| `label_version` | `tick-horizon-v1` |
 | `candle_version` | `1m-clock-v1` |
 | `dataset_version` | `2026-11-18.1` |
 | `model_version` | `model-2026-11-18` |
 | `code_commit` | Git commit hash |
 | `config_hash` | Hash of the resolved configuration |
 
-A change to bin size, window length, sigma, label definition, or session timezone requires a version bump.
+A change to bin size, macro/fast window length, `sigma_7`, label definition, or the active instrument requires a version bump.
 
 ---
 
@@ -148,9 +155,11 @@ Online jobs:
 
 - Tick validation and persistence: continuous.
 - Candle finalization: every minute.
-- Feature snapshot: at decision times.
-- Inference: at decision times.
+- Feature snapshot: on every accepted tick.
+- Inference: on every accepted tick, or on a configured subsample.
 - Monitoring: continuous.
+
+The offline feature engine is batch-oriented: it groups sorted ticks into candles and updates the profile and `sigma_7` once per completed candle. Moving to live inference requires the same functions with incremental state, which is a separate task.
 
 ---
 

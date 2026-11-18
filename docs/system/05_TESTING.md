@@ -8,16 +8,33 @@ Status: Current
 
 ## Current Tests
 
+### Receiver
+
 `test_receiver.py` uses `unittest` and covers:
 
 1. Identity formatting when no local asset name is mapped.
 2. Buffering and logging when a valid candle-shaped frame arrives.
 3. Loading a valid `asset_names.json` file.
 
+### AMT pipeline
+
+`tests/` uses `unittest` and covers the offline `amt` package:
+
+| File | Coverage |
+|------|----------|
+| `test_config.py` | Default config, unknown keys, window validation, horizon ordering |
+| `test_data.py` | Sorting, exact dedupe, offset requirement, `active_id` mismatch, missing columns |
+| `test_timeframes.py` | Minute bucketing, forming-candle exclusion, gap detection, sorted input |
+| `test_profile.py` | Worked example, POC tie-breaks, bin edges, single bin, internal gap, insufficient ticks |
+| `test_features.py` | One row per tick, null context, layer ratios, forming candle exclusion, causal prefix equality |
+| `test_labels.py` | Exit selection, tolerance, ties, missing exits, multi-horizon output |
+
 ### Run
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest -v test_receiver
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
+.\.venv\Scripts\python.exe -m amt.build --input data\ticks.csv
 ```
 
 ### Current Gaps
@@ -30,7 +47,23 @@ Status: Current
 - No test for the extension queue dropping the oldest message.
 - No test for `load_asset_names` rejecting invalid files.
 - No integration test that starts the receiver and sends multiple frames.
+- No end-to-end test from live receiver to feature rows.
 - No load or soak test.
+
+---
+
+## Documentation Checks
+
+The previous `scripts/validate_scaffold.*` validators were scaffolding. Until CI is added, run this manual checklist after structural documentation changes:
+
+1. Every `.md` file under `docs/` starts with a status label: `Status: Current`, `Status: Planning`, or `Status: Historical`.
+2. Every link in `docs/index.md` resolves to an existing file.
+3. No document links to `sources/` or `scripts/`.
+4. `AGENTS.md`, `README.md`, and `RUNBOOK.md` agree on layout and commands.
+5. Commands use the virtual environment path, not bare `python`.
+6. Feature and label versions referenced in docs match `amt/config.py`.
+
+Automate this with `tests/test_docs.py` when CI exists.
 
 ---
 
@@ -70,14 +103,17 @@ Status: Current
 
 - `VAL <= POC <= VAH`.
 - The value area contains at least the target share unless all bins are included.
-- A feature snapshot uses no tick with `received_at > decision_at`.
+- A profile with fewer than the minimum ticks is null, never synthesised.
+- A feature snapshot uses no tick with a timestamp later than the decision tick.
 
 ### Labels and EV
 
 - A label never appears in its own feature row.
 - Train/validation/test splits are chronological.
 - Payout breakeven matches the formula.
-- Ties are handled according to the configured policy.
+- A tie is never mapped to a directional label.
+- A missing exit is never mapped to a directional label.
+- Purge length covers the longest horizon plus tolerance.
 
 ### Execution
 
@@ -90,10 +126,10 @@ Status: Current
 
 ## Test Data
 
-- Keep small, anonymised JSONL fixtures under `tests/fixtures/`.
+- Keep small, anonymised fixtures under `tests/fixtures/`.
 - Include at least one session with gaps, duplicates, and out-of-order ticks.
-- Include a fixture with multiple `active_id` values.
 - Never commit real account identifiers or credentials.
+- Multi-instrument fixtures are deferred until multi-instrument support exists.
 
 ---
 
