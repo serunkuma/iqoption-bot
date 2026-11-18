@@ -1,60 +1,114 @@
-# IQ Option local tick bridge
+# IQ Option Bot
 
-This project forwards `candle-generated` WebSocket messages observed on
-`*.iqoption.com` to a local Python WebSocket receiver. It does not place trades
-or send data to a remote service.
+Status: Current
 
-## Run the receiver
+> **Current status: live tick-capture proof of concept.** The project captures IQ Option browser WebSocket messages and logs them locally. It does **not** generate candles, place trades, or manage risk yet. Do not use it with real money.
 
-From the project directory, create and activate a virtual environment, then
-install the dependency and start the server:
+---
+
+## What It Does Today
+
+- A Chrome Manifest V3 extension runs on `*.iqoption.com`.
+- `inject.js` observes the page's WebSocket messages.
+- `content.js` forwards matching payloads to `ws://localhost:8765`.
+- `receiver.py` validates each frame, keeps the last 500 raw messages per `active_id` in memory, and logs OHLCV fields.
+- `asset_names.json` maps `active_id` values to human-readable names for logs.
+
+The receiver console has been manually verified to show live prices from the platform.
+
+## What It Does Not Do Yet
+
+- No 1-minute candle generation.
+- No persistent tick storage.
+- No AMT/TPO features.
+- No ML model or signals.
+- No risk controls.
+- No order execution.
+- No backtesting.
+
+## Quick Start
+
+### 1. Create the environment
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 py -m pip install -r requirements.txt
-py receiver.py
 ```
 
-The receiver listens on `ws://localhost:8765`. Keep it running while using the
-extension. Candle history is kept in memory per `active_id`, with the most
-recent 500 candles retained. Every received candle is processed and logged
-with its `active_id`, OHLCV values, and timestamp. Any identity fields present
-in the candle payload (such as `symbol` or `ticker`) are included in the log.
-
-## Identify active IDs
-
-The candle payload always provides `active_id`, but it may not include a
-human-readable asset name. Add names you know to `asset_names.json`, using the
-ID shown by the receiver as a string key:
-
-```json
-{
-  "42": "EUR/USD",
-  "77": "GBP/USD"
-}
-```
-
-The mapping changes log labels only; it does not filter or modify incoming
-candles. If an ID is not mapped and the payload has no symbol/name field, the
-receiver reports it as `unmapped` while still showing the numeric `active_id`.
-
-Run the receiver tests with:
+### 2. Start the receiver
 
 ```powershell
-py -m unittest -v test_receiver
+.\.venv\Scripts\python.exe receiver.py
 ```
 
-## Load the Chrome extension
+The receiver listens on `ws://localhost:8765`.
 
-1. Open `chrome://extensions` and enable **Developer mode**.
-2. Select **Load unpacked** and choose this project's `chrome-extension` folder.
-3. Open or reload an IQ Option page on `iqoption.com`. The extension reconnects
-   to the local receiver every two seconds after a disconnect.
+### 3. Load the extension
 
-The extension only runs on `*.iqoption.com`. If your Traderoom uses a different
-official IQ Option hostname, update both `matches` entries in
-`chrome-extension/manifest.json` to that specific host before loading the
-extension.
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Select **Load unpacked** and choose the `chrome-extension` folder.
+4. Open or reload an IQ Option page.
 
-Edit `process_tick` in `receiver.py` to add indicators or custom calculations.
+The extension reconnects every two seconds after a disconnect. While disconnected it queues up to 500 messages and drops the oldest when full.
+
+### 4. Verify ticks
+
+Watch the receiver console. Each accepted frame logs the asset identity, `close`, `open`, `min`, `max`, `volume`, `at`, and buffer length.
+
+### 5. Run the tests
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest -v test_receiver
+```
+
+## Architecture
+
+```text
+IQ Option page WebSocket
+    -> chrome-extension/inject.js
+    -> chrome-extension/content.js
+    -> ws://localhost:8765
+    -> receiver.py
+    -> in-memory raw message buffer (500 per active_id)
+    -> console log
+```
+
+The target architecture adds raw tick persistence, 1-minute candles, AMT features, labels, a two-stage model, risk controls, and paper/demo-first execution. See the [system overview](docs/system/01_OVERVIEW.md).
+
+## Documentation
+
+- [docs/index.md](docs/index.md) — full documentation index
+- [AGENTS.md](AGENTS.md) — source of truth for agents and developers
+- [RUNBOOK.md](RUNBOOK.md) — operating the current PoC
+- [docs/system/01_OVERVIEW.md](docs/system/01_OVERVIEW.md) — current vs target architecture
+- [docs/data/01_TICK_STREAM.md](docs/data/01_TICK_STREAM.md) — what a tick means here
+- [docs/planning.md](docs/planning.md) — roadmap and phases
+- [docs/system/10_LIMITATIONS_AND_BACKLOG.md](docs/system/10_LIMITATIONS_AND_BACKLOG.md) — what to improve next
+
+## Roadmap Summary
+
+1. Harden tick capture: verify semantics, persist raw ticks, add quality checks and configuration.
+2. Build 1-minute candles and AMT/TPO features.
+3. Build and validate the ML pipeline.
+4. Add paper/demo execution, risk controls, and operations.
+
+## Safety
+
+- This is a research project, not financial advice.
+- Automated trading may violate IQ Option’s terms or local regulations; verify eligibility and platform rules before any live use.
+- Real-money trading is not supported by the current code.
+- Live execution requires paper/demo testing, calibrated validation, hard risk limits, and a kill switch.
+- Never commit credentials, SSIDs, or account data.
+
+## Requirements
+
+- Windows with PowerShell.
+- Python 3.11 or newer.
+- Chrome or a Chromium-based browser.
+- `websockets>=12,<16`.
+
+---
+
+*Last updated: 2026-11-18*

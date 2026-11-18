@@ -17,3 +17,19 @@ htmlcov/
 
 # Local logs
 *.log
+logs/
+
+# Local data and generated artifacts
+reports/
+models/
+*.sqlite
+*.db
+*.db-journal
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Documentation migration staging (should not exist in the repo)
+/docs-driven/
