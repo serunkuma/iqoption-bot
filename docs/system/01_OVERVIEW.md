@@ -1,99 +1,97 @@
-# System Overview — Tick Capture and Target Architecture
+# System Overview
 
 Status: Current
 
-> This document describes what exists today, what has been manually verified, and the target architecture. It separates the current proof of concept from planned trading functionality.
+> The repository is a working offline prediction engine fed by a live tick capture, plus a paper-only backtest. It does not place orders. This document separates what runs today from what is still planned.
 
 ---
 
 ## Current State
 
-The repository currently implements a **live tick-capture proof of concept**:
+| Layer | State |
+|-------|-------|
+| Tick capture | Live, Chrome MV3 extension plus `components/receiver.py` |
+| Durable capture | JSONL per UTC day under `data/raw/` when `serve` runs |
+| Tick store | Parquet, validated, ordered, deduplicated |
+| Snapshots | Continuity-gated evaluation points at configurable minute offsets |
+| Features | Stateless `amt-v3` table with a 16-feature `core16-v1` model vector |
+| Labels | `snapshot-horizon-v1` at 60/90/120/180s, ties and misses explicit |
+| Models | Four calibrated LightGBM classifiers, purged walk-forward, held-out evaluation slice |
+| Router | Payout-aware EV hurdle, single best horizon/direction, explicit no-trade |
+| Backtest | Held-out replay through the router and a paper broker |
+| Execution | Paper only; demo and live are rejected |
+| Risk | Fixed stake and one open trade; no daily limit, no kill switch |
 
-1. A Chrome Manifest V3 extension runs on `*.iqoption.com`.
-2. `inject.js` patches the page's `WebSocket` constructor and observes incoming messages.
-3. Messages whose outer payload has `name === "candle-generated"` are posted to the extension's isolated world.
-4. `content.js` forwards the raw JSON string to `ws://localhost:8765`.
-5. `receiver.py` validates the frame, stores it in an in-memory buffer per `active_id`, and logs the OHLCV fields.
-
-The receiver console was manually observed to show live, correct prices from the platform.
-
-### Current Architecture
-
-```text
-IQ Option Traderoom (browser)
-        │
-        │ page WebSocket messages
-        ▼
-chrome-extension/inject.js  (MAIN world)
-        │  window.postMessage({ source: "IQ_TICK_BRIDGE", payload })
-        ▼
-chrome-extension/content.js  (isolated world)
-        │  WebSocket ws://localhost:8765
-        │  reconnect every 2 s; queue up to 500 messages
-        ▼
-receiver.py
-        │  JSON validation
-        │  require name == "candle-generated"
-        │  require msg.active_id
-        │  deque(maxlen=500) per active_id
-        ▼
-console log
-```
-
-### Verified
-
-- The extension can intercept and forward IQ Option WebSocket messages.
-- The local receiver accepts and logs the forwarded frames.
-- `active_id`, OHLCV fields, and the `at` field are visible in the logs.
-- Asset-name mapping works for display labels.
-- Malformed JSON and frames without `active_id` are ignored.
-- The receiver binds only to localhost.
-
-### Not Verified
-
-- Whether the intercepted frame represents a raw tick, a partial-candle update, or a completed candle.
-- The exact meaning of `at` and whether it is a candle start, a price timestamp, or another server timestamp. It is currently ignored.
-- Long-running stability under a full market session.
-- Behaviour across reconnects, broker disconnects, and weekends.
-- Data completeness and ordering guarantees.
-- Whether the payload `volume` field has any relationship to traded volume.
-- Whether the stream is sufficient for the planned AMT/TPO features at scale.
+The capture path has been observed live. Everything downstream runs end to end on captured or synthetic data and is unit-tested. None of it has been validated as profitable, and no result to date shows an edge.
 
 ---
 
-## Target Architecture
+## Current Architecture
 
 ```text
-Tick stream
-    │
-    ▼
-[Ingestion and validation]
-    │  schema checks, dedupe, ordering, gaps, receipt timestamps
-    ▼
-[Raw tick store]
-    │  JSONL first; SQLite/Parquet later
-    ▼
-[1-minute candle builder]
-    │  whole-minute OHLCV; volume = tick count
-    ▼
-[Feature engine]
-    │  macro 7 / fast 3 / forming layers, TPO value area,
-    │  normalized distance, excess, tick rate, price speed, range
-    ▼
-[Label builder]
-    │  tick-horizon direction labels at 60/90/120/180s; payout-aware EV
-    ▼
-[Model and signal layer]
-    │  two-stage regime architecture; calibration; no-trade output
-    ▼
-[Risk and execution]
-    │  stake sizing, daily loss limit, kill switch, demo first
-    ▼
-[Trade journal and monitoring]
+IQ Option Traderoom (browser)
+        |
+        v
+chrome-extension/inject.js     MAIN world, filters name == "candle-generated"
+        |  window.postMessage
+        v
+chrome-extension/content.js    isolated world, reconnect + queue
+        |  ws://localhost:8765
+        v
+components/receiver.py         validate, stamp received_at, buffer, sink
+        |  JsonlTickSink
+        v
+data/raw/ticks-YYYY-MM-DD.jsonl
+        |  runner.py build
+        v
+engine.store.TickStore         ordered, deduplicated, point-in-time
+        |
+        v
+engine.sampler                 continuity gate, delayed entry, exits
+        |
+        v
+engine.features                core16-v1 + amt-v3 diagnostics
+        |
+        v
+data/dataset.parquet           features joined to labels
+        |
+        v
+engine.models                  four calibrated horizon classifiers
+        |
+        v
+engine.router                  EV hurdle, one proposal or no-trade
+        |
+        v
+engine.backtest + execution    paper trades, held-out replay
+        |
+        v
+reports/backtest.{json,md}
 ```
 
-The target architecture is deliberately staged. The current PoC is only the first box: ingestion.
+`runner.py` is the only entry point. It wires the components; no component imports another component's internals.
+
+---
+
+## Verified
+
+- The extension intercepts and forwards IQ Option WebSocket frames.
+- The receiver validates the envelope, stamps `received_at`, and can persist every accepted tick as JSONL.
+- CSV, JSONL, and Parquet ingestion enforce the tick contract; exact duplicates are dropped; ordering is restored.
+- Snapshot sampling rejects missing history, gaps, sparse bars, and missing entry ticks with specific counters.
+- The 16 core features are computed from one snapshot with no lookahead.
+- Training produces one calibrated model per horizon, or records why a horizon was skipped.
+- The backtest replays only held-out probabilities, enforces the open-trade limit, and writes JSON and Markdown reports.
+- 111 unit tests pass across config, store, timeframes, profile, sampler, features, labels, models, router, execution, reports, backtest, and receiver.
+
+## Not Verified
+
+- Whether a captured frame is a raw tick, a partial-candle update, or a completed candle.
+- Whether `msg.at` is a candle start, a price timestamp, or another server clock. It is stored but never promoted.
+- Long-run stability across sessions, reconnects, weekends, and broker maintenance.
+- Data completeness: gaps are detectable, but their cause is not.
+- Whether the payload `volume` has any relationship to traded volume. It is not used.
+- Whether AMT structure has predictive value on OTC synthetic pricing.
+- Whether the model has any edge after payout. Current synthetic results are indistinguishable from noise.
 
 ---
 
@@ -101,42 +99,55 @@ The target architecture is deliberately staged. The current PoC is only the firs
 
 | Layer | Status | Notes |
 |-------|--------|-------|
-| Browser tick capture | Current | Proven manually |
-| Receiver validation and logging | Current | Basic checks only |
-| Raw tick persistence | Planned | No durable store yet |
-| 1-minute candle aggregation | Planned | Candles are not generated today |
-| TPO/Value Area features | Planned | Requires tick history |
-| Labels and payout math | Planned | Depends on instrument metadata |
-| ML pipeline | Planned | Approach A is the primary design |
-| Paper/demo execution | Planned | Must follow validation gate |
-| Live execution | Not approved | Requires separate safety review |
-| Monitoring and runbooks | Partial | Operational runbook exists for the PoC |
+| Browser tick capture | Current | Manually observed live |
+| Durable tick capture | Current | JSONL, daily rotation, append-only |
+| Tick store and replay | Current | Parquet, deterministic rebuild |
+| Snapshot sampling | Current | Batch only, one instrument |
+| Feature engine | Current | Stateless, snapshot-based |
+| Labels and payout math | Current | Ties and missing exits explicit |
+| Model suite | Current | Four horizons, calibrated, walk-forward |
+| Signal router | Current | EV hurdle, reason codes |
+| Paper backtest | Current | Held-out slice only |
+| Live features and signals | Not implemented | `serve` captures only |
+| Demo/live execution | Not implemented | Mode names validated, then rejected |
+| Risk manager and kill switch | Not implemented | Fixed stake only |
+| Multi-instrument | Not implemented | Filtered to one `active_id` |
+| Monitoring and alerts | Not implemented | Console logs and reports only |
 
 ---
 
 ## Key Files
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
-| `chrome-extension/inject.js` | Patches `window.WebSocket` and filters incoming messages |
-| `chrome-extension/content.js` | Forwards messages to the local receiver with reconnect and queueing |
-| `chrome-extension/manifest.json` | Extension manifest and host permissions |
-| `receiver.py` | Local WebSocket receiver and in-memory buffer |
-| `test_receiver.py` | Unit tests for receiver formatting, buffering, and asset mapping |
-| `asset_names.json` | Display-name mapping for `active_id` values |
-| `requirements.txt` | Python dependency declaration |
+| `runner.py` | Entry point: `serve`, `build`, `train`, `backtest`, `diagnose` |
+| `components/receiver.py` | WebSocket capture, receipt stamping, tick sink |
+| `engine/config.py` | TOML schema, validation, version constants, config hash |
+| `engine/store.py` | Tick ingestion, ordering, dedupe, point-in-time lookup |
+| `engine/sampler.py` | Snapshot gate, continuity, entry/exit timing |
+| `engine/features.py` | `core16-v1` vector and `amt-v3` diagnostics |
+| `engine/domain/` | Candles, profile, labels |
+| `engine/models.py` | Calibration, walk-forward, model suite |
+| `engine/router.py` | EV hurdle and proposal selection |
+| `engine/execution.py` | Paper broker and trade journal |
+| `engine/backtest.py` | Held-out replay |
+| `engine/reports.py` | Calibration, importance, report bundle |
+| `engine/build.py` | Pipeline assembly and artifact writing |
+| `config/default.toml` | Active configuration |
+| `chrome-extension/` | Browser capture extension |
+| `tests/` | Unit tests for every component |
 
 ---
 
 ## Related Documentation
 
-- [Tick stream contract](../data/01_TICK_STREAM.md)
-- [1-minute candle aggregation](../data/03_CANDLE_AGGREGATION.md)
-- [Limitations and improvement backlog](10_LIMITATIONS_AND_BACKLOG.md)
+- [Components](02_COMPONENTS.md)
+- [Runtime and entry point](11_RUNTIME_AND_ENTRYPOINT.md)
 - [Data pipeline](07_DATA_PIPELINE.md)
 - [ML pipeline](08_ML_PIPELINE.md)
-- [AMT concepts](../concepts/05_AUCTION_MARKET_THEORY.md)
+- [Model validation](09_MODEL_VALIDATION.md)
+- [Limitations and backlog](10_LIMITATIONS_AND_BACKLOG.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

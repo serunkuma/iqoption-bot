@@ -29,16 +29,21 @@ Use a numbered series that mirrors the system's logical layers:
 ```
 system/
 ├── README.md
-├── 01_OVERVIEW.md              ← Current PoC and target architecture
-├── 02_COMPONENTS.md            ← Component responsibilities and wiring
-├── 03_CONFIGURATION.md         ← Current constants and planned config
-├── 04_INTERFACES.md            ← Extension-to-receiver protocol and contracts
-├── 05_TESTING.md               ← Test strategy and coverage gaps
-├── 06_SECURITY.md              ← Security model and trading safety
-├── 07_DATA_PIPELINE.md         ← Tick → candle → feature → dataset
-├── 08_ML_PIPELINE.md           ← Two-stage regime architecture
-├── 09_MODEL_VALIDATION.md      ← Walk-forward gate and calibration
-└── 10_LIMITATIONS_AND_BACKLOG.md ← Gaps and prioritised improvements
+├── 01_OVERVIEW.md                 ← Current system and target architecture
+├── 02_COMPONENTS.md               ← Component responsibilities and wiring
+├── 03_CONFIGURATION.md            ← TOML schema, defaults, validation
+├── 04_INTERFACES.md               ← External and internal contracts
+├── 05_TESTING.md                  ← Test strategy and coverage gaps
+├── 06_SECURITY.md                 ← Security model and trading safety
+├── 07_DATA_PIPELINE.md            ← Capture → store → snapshot → dataset
+├── 08_ML_PIPELINE.md              ← Four-horizon calibrated classifiers
+├── 09_MODEL_VALIDATION.md         ← Walk-forward gate and calibration
+├── 10_LIMITATIONS_AND_BACKLOG.md  ← Gaps and prioritised improvements
+├── 11_RUNTIME_AND_ENTRYPOINT.md   ← runner.py commands and wiring
+├── 12_MODEL_SUITE.md              ← Training, calibration, evaluation table
+├── 13_SIGNAL_ROUTER.md            ← EV hurdle and proposal selection
+├── 14_EXECUTION_AND_RESOLUTION.md ← Paper broker and trade resolution
+└── 15_REPORTS_AND_DIAGNOSTICS.md  ← diagnose, build, train, backtest output
 ```
 
 Not every project needs every file. Add only what the project requires.
@@ -148,4 +153,4 @@ Main body — tables, diagrams, code blocks.
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

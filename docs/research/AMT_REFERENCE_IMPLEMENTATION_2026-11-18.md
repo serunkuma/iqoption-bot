@@ -2,7 +2,9 @@
 
 Status: Historical
 
-> Records how an external AMT feature-engineering sample was reviewed, what was adopted, and what was deliberately changed before the offline `amt` package was written.
+> Records how an external AMT feature-engineering sample was reviewed, what was adopted, and what was deliberately changed before the first offline feature package was written.
+>
+> **Note:** this note predates the `engine/` package. Paths and version names in the "What Was Adopted" table have been updated to the current equivalents; the reasoning is unchanged.
 
 ---
 
@@ -10,7 +12,7 @@ Status: Historical
 
 An external AI-assisted conversation produced a Python sample that built a rolling TPO profile, tick velocity features, a two-stage balance/imbalance model, and a simple backtest. It used only `timestamp` and `price`, and it mixed feature engineering with labels, training, and evaluation.
 
-The sample was treated as a **reference prototype**, not as a specification and not as code to copy. The canonical implementation is the offline `amt` package in this repository.
+The sample was treated as a **reference prototype**, not as a specification and not as code to copy. The canonical implementation is `engine/` in this repository.
 
 ---
 
@@ -19,8 +21,8 @@ The sample was treated as a **reference prototype**, not as a specification and 
 | Idea | Where it landed |
 |------|-----------------|
 | Tick density as the volume proxy | [TPO and Value Area](../data/04_TPO_VALUE_AREA.md) |
-| Rolling POC, VAH, VAL | `amt/profile.py` |
-| Normalising distance by volatility | `amt/features.py` |
+| Rolling POC, VAH, VAL | `engine/domain/profile.py` |
+| Normalising distance by volatility | `engine/features.py` |
 | Separating balance from imbalance | [ML Pipeline](../system/08_ML_PIPELINE.md) |
 | Payout breakeven instead of raw accuracy | [Labels and EV](../data/06_LABELS_PAYOUTS_AND_EV.md) |
 | Some embargo between train and test | [Model Validation](../system/09_MODEL_VALIDATION.md) |
@@ -61,7 +63,7 @@ The sample was treated as a **reference prototype**, not as a specification and 
 
 ## Decision
 
-The external sample is historical context. The canonical definitions are the data and system specifications; the canonical implementation is `amt/` with `amt-v2` features and `tick-horizon-v1` labels. Any future change must be justified against the specs and the validation gate, not against the sample.
+The external sample is historical context. The canonical definitions are the data and system specifications; the canonical implementation is `engine/` with `amt-v3` features, the `core16-v1` model vector, and `snapshot-horizon-v1` labels. Any future change must be justified against the specs and the validation gate, not against the sample.
 
 The raw discussion input was removed from the working tree after its useful content was absorbed. It remains available in git history.
 
@@ -78,4 +80,4 @@ The raw discussion input was removed from the working tree after its useful cont
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

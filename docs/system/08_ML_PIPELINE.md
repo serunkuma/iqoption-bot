@@ -1,228 +1,167 @@
 # ML Pipeline
 
-Status: Planning
+Status: Current
 
-> This document specifies the primary machine-learning architecture. It follows the two-stage regime design (Approach A). Approach B is retained as a research alternative.
+> The implemented architecture is four shallow calibrated binary classifiers, one per expiry horizon, trained on purged walk-forward splits. The earlier two-stage regime design is retained as research, not as the shipped path.
 
 ---
 
-## Primary Design — Approach A: Two-Stage Regime Architecture
-
-### Stage 1 — Market State Gate
-
-Classify each tick at entry time `t` as:
-
-| State | Rule-based definition |
-|-------|-----------------------|
-| Balance | Price inside `[VAL, VAH]` and forming activity is not elevated |
-| Imbalance | Price outside `[VAL, VAH]` with elevated forming activity in the breakout direction |
-| Ambiguous | Neither condition is clear |
-
-Initial implementation:
-
-- Rule-based gate using the features in [AMT Feature Specification](../data/05_AMT_FEATURE_SPEC.md).
-- No ML required for Stage 1 at first.
-- A predictive classifier may be added later to forecast the next-state regime.
-
-Worked rule:
+## Implemented Architecture
 
 ```text
-forming_activity = mean(price_speed_forming_3, tick_rate_forming_3, range_forming_3)
-elevated         = forming_activity >= forming_activity_threshold
-
-balance    = inside_va == 1 and not elevated
-imbalance  = inside_va == 0 and elevated
-              and sign(price - POC) == sign(price_change_forming)
-ambiguous  = otherwise
+dataset (one row per snapshot per horizon)
+        |
+        +--> 60s  classifier --> calibrator --> p(call)
+        +--> 90s  classifier --> calibrator --> p(call)
+        +--> 120s classifier --> calibrator --> p(call)
+        +--> 180s classifier --> calibrator --> p(call)
+                                                   |
+                                                   v
+                                            signal router
 ```
 
-`forming_activity_threshold` is a configuration value, initially a fixed quantile of the training window. It must not be tuned on the test set.
+Each classifier answers one question: *is the exit price above the entry price at this horizon?* The label `put` is the complement. The router, not the model, decides whether the probability is high enough to trade after payout.
 
-The gate must be causal. It may not use any later tick or the outcome.
+### Why Not One Multi-Class Model
 
-### Stage 2 — Conditional Directional Models
+The horizons have different payouts and different signal-to-noise. A shared multi-class model couples them: a bad 180s boundary can degrade the 60s decision. Independent binaries also let a horizon be skipped cleanly when it has too few rows or one class.
 
-| Model | Training rows | Intended behaviour |
-|-------|---------------|--------------------|
-| Balance model | Rows labelled `balance` | Mean reversion: Put near VAH, Call near VAL, target POC |
-| Imbalance model | Rows labelled `imbalance` | Continuation in the breakout direction |
-| No-trade | Ambiguous, missing data, or low confidence | Abstain |
+### Why Not the Two-Stage Regime Model First
 
-The initial version trains a separate model per horizon (60, 90, 120, 180 seconds) for each regime. A shared model with the horizon as a feature is a later experiment and must beat the per-horizon baseline to replace it.
+The two-stage design — a balance/imbalance gate, then conditional models — needs a validated regime rule and enough rows per regime to train two models. Neither exists. Building it first would mean training on an unvalidated label with a fraction of the data.
 
-Each model outputs a calibrated probability for the chosen direction, or a no-trade decision.
+The rule-based gate remains a sensible next research step, and the diagnostics already carry the inputs it would need (`inside_va`, `edge_proximity`, `excess_*`, activity ratios). See [Approach A as research](#approach-a-as-research).
 
-### Architecture
+---
+
+## Training Flow
+
+1. Filter to rows where `horizon_seconds == h` and `usable == 1`.
+2. Drop rows without a label.
+3. Encode `label == "call"` as `1`, everything else as `0`.
+4. Build the 16-column matrix in `CORE_FEATURES` order.
+5. Compute overlap weights from snapshot spacing and horizon.
+6. Run purged walk-forward, collecting out-of-sample predictions.
+7. Split those predictions chronologically 70/30.
+8. Fit the calibrator on the earlier 70%.
+9. Score and store the later 30% as the evaluation table.
+10. Refit the shipped estimator on all usable rows.
+
+Full detail is in [Model suite](12_MODEL_SUITE.md).
+
+---
+
+## Split Discipline
 
 ```text
-Tick + completed candles + forming candle + metadata
-        │
-        ▼
-Feature snapshot (amt-v2, one row per tick)
-        │
-        ▼
-Stage 1: regime gate
-   ├── balance ──► Balance model per horizon ──┐
-   ├── imbalance ─► Imbalance model per horizon ─┤
-   └── ambiguous ────────────────────────────────┤
-                                                 ▼
-                                      Calibrated probability
-                                                 │
-                                                 ▼
-                                      EV threshold + risk check
-                                                 │
-                                                 ▼
-                                      Call / Put / No-Trade
+time ----------------------------------------------------------->
+
+fold 1: |-- train --|-- purge --|-- test --|
+fold 2: |------ train ------|-- purge --|-- test --|
+...
 ```
 
----
+- Training rows must end at least `purge_seconds` (180s) before the test fold.
+- No row is ever in both a training slice and its own test fold.
+- The evaluation slice is later in time than the calibration slice.
+- No random shuffling anywhere.
 
-## Why Two Stages
-
-A single model trained on all rows mixes two incompatible behaviours:
-
-- Inside value, extensions tend to revert.
-- Outside value with initiative, moves tend to continue.
-
-Splitting the data before training prevents one regime from diluting the other. It also makes failures diagnosable: a bad balance model is a different problem from a bad imbalance model.
+Overlapping label windows are handled by the purge and by down-weighting, not by pretending rows are independent.
 
 ---
 
-## Approach B — AMT-Penalised Loss (Research)
+## Calibration
 
-A single model can be trained with an added structural penalty:
+`auto` chooses isotonic with at least 500 calibration rows, otherwise Platt. A Platt fit with a non-positive slope is rejected and identity calibration is shipped, with a recorded note.
 
-```text
-L_total = L_BCE(y, p_hat) + lambda * Penalty_AMT(p_hat, Z_VAH, Z_VAL, velocity)
-```
-
-Example penalty behaviour:
-
-- At VAH with low velocity (rejection context), a high Call probability increases loss.
-- At VAL with low velocity, a high Put probability increases loss.
-- A breakout with high initiative velocity should not be penalised in the breakout direction.
-
-Requirements before this is considered:
-
-1. A precise, differentiable penalty definition.
-2. A baseline comparison against Approach A.
-3. Evidence that the penalty improves out-of-sample EV, not just training loss.
-
-Approach B is not the default and must not block the primary pipeline.
+A negative-slope Platt fit means the raw score is anti-correlated with the outcome on that slice. Shipping it would invert every decision, so the trainer refuses it. This is a real failure mode on noisy, small samples and it is not hidden.
 
 ---
 
-## Baseline Before ML
+## Hurdle, Not Threshold Clamping
 
-Before training any model, build a rule-based AMT baseline:
-
-| Setup | Signal |
-|-------|--------|
-| Balance, price near VAH, rejection signs | Put toward POC |
-| Balance, price near VAL, rejection signs | Call toward POC |
-| Imbalance, price outside VAH with initiative | Call continuation |
-| Imbalance, price outside VAL with initiative | Put continuation |
-| Ambiguous | No trade |
-
-The baseline provides:
-
-- A sanity check for the features.
-- A performance floor the ML model must beat.
-- A fallback if the model is unavailable.
+The router computes `EV = q * (1 + payout) - 1` and requires `EV >= min_ev`. It never rescales `q` to clear the hurdle. If the model's honest probability does not produce enough expected value, the correct output is no trade.
 
 ---
 
-## Training Workflow
+## Evaluation Contract
 
-1. Build a versioned dataset: features, labels, metadata, quality flags.
-2. Split chronologically into train, validation, and test.
-3. Purge rows whose label window crosses a split boundary; embargo a configurable period after each split.
-4. Train the balance and imbalance models separately for each horizon.
-5. Calibrate probabilities on a held-out calibration set.
-6. Evaluate with the metrics in [Model Validation](09_MODEL_VALIDATION.md).
-7. Register the model artifact with feature and label versions.
-8. Only deploy if the validation gate passes.
+| Data | Used for |
+|------|----------|
+| Walk-forward training slices | Fitting estimators |
+| Earlier 70% of OOS | Fitting the calibrator |
+| Later 30% of OOS | Metrics, calibration report, backtest replay |
+| All usable rows | Final shipped estimator refit |
 
-Rows are ticks, so adjacent rows are highly correlated and label windows overlap. Training must not treat row count as independent sample size. Purging, embargo, and per-fold reporting are mandatory.
-
-### Empty or One-Class Regimes
-
-A regime subset can be empty or contain a single class. In that case:
-
-- Skip the model and record the reason.
-- Never fabricate a probability.
-- Never silently train on the other regime's rows.
-
-The validation report must state which regime/horizon models were skipped.
+The backtest may only call `evaluate_snapshot`, which reads the later 30%. It cannot call `predict_vector`. This prevents the in-sample replay bug that produced 254 losing trades in an earlier iteration.
 
 ---
 
-## Inference Workflow
+## Metrics
 
-1. Receive a complete feature snapshot for an accepted tick.
-2. Check feature version and model version compatibility.
-3. Run the Stage 1 gate.
-4. Run the appropriate Stage 2 model for the chosen horizon.
-5. Calibrate or verify calibration.
-6. Compute EV using the current payout for that horizon.
-7. Apply the no-trade threshold and risk checks.
-8. Emit a signal with model version, horizon, and reason.
+| Metric | Use |
+|--------|-----|
+| Brier | Primary probability score |
+| Log loss | Penalises confident errors |
+| AUC | Ranking quality, not profitability |
+| ECE and reliability curve | Calibration shape |
+| EV per trade | The decision-relevant number |
+| Win rate vs breakeven | Sanity check against payout |
 
-If any step fails, emit no-trade. A structural guardrail must produce an explicit no-trade reason code, not overwrite the probability.
-
----
-
-## Model Registry
-
-Each model artifact records:
-
-| Field | Purpose |
-|-------|---------|
-| `model_id` | Unique identifier |
-| `model_version` | Human-readable version |
-| `feature_version` | Required feature set |
-| `label_version` | Training label definition |
-| `training_range` | Start and end timestamps |
-| `validation_metrics` | Out-of-sample metrics |
-| `calibration` | Calibration method and metrics |
-| `library` | Library and version |
-| `artifact_path` | Local path or hash |
-| `created_at` | Creation timestamp |
-| `status` | Candidate, active, retired |
-
-The active model is a pointer, not a hard-coded path.
+A model with 0.55 AUC and Brier 0.25 is not distinguishable from noise at these sample sizes. Reporting it as an edge would be dishonest.
 
 ---
 
-## Library Choice
+## Reproducibility
 
-Recommended starting point: **LightGBM** for tabular features.
+| Recorded | Where |
+|----------|-------|
+| Feature, core feature, label versions | Dataset rows, suite |
+| Config hash | Build summary, suite |
+| Random seed | Config |
+| Held-out evaluation rows | Suite |
+| Calibration notes and skip reasons | Suite metrics |
 
-Reasons:
+Given the same dataset and config, training is deterministic for a fixed LightGBM build and thread count (`n_jobs=1`).
 
-- Strong performance on tabular data.
-- Fast training and inference.
-- Handles missing values.
-- Easy feature-importance inspection.
+---
 
-Alternatives:
+## Approach A as Research
 
-- XGBoost: comparable; choose based on team familiarity.
-- PyTorch: only if a sequence model or custom loss is justified by evidence.
+The original two-stage design remains documented because it is still the leading hypothesis for improving the model:
 
-The library is not a final decision. Document the choice when the first model is built.
+1. Classify the market state at the snapshot as balance, imbalance, or ambiguous using a rule-based gate on value-area position and activity.
+2. Train separate directional models per state, or add the state as a feature.
+
+Preconditions before implementing it:
+
+- The regime rule must be defined with explicit thresholds and validated on held-out data.
+- Each regime must have enough usable rows to train and calibrate.
+- The regime must improve held-out EV, not just AUC.
+
+Until then, the four-horizon suite is the production path.
+
+---
+
+## What Is Not Implemented
+
+- Regime gating.
+- Drift monitoring.
+- Online or incremental learning.
+- Live inference (the vector function exists; the loop does not).
+- Ensembling, stacking, or hyperparameter search.
+- Payout forecasting: payouts are configured.
 
 ---
 
 ## Related Documentation
 
-- [AMT Feature Specification](../data/05_AMT_FEATURE_SPEC.md)
-- [Labels, Payouts, and Expected Value](../data/06_LABELS_PAYOUTS_AND_EV.md)
-- [Model Validation](09_MODEL_VALIDATION.md)
-- [Data Pipeline](07_DATA_PIPELINE.md)
-- [Auction Market Theory](../concepts/05_AUCTION_MARKET_THEORY.md)
-- [AMT on OTC](../research/AMT_ON_OTC.md)
+- [Model suite](12_MODEL_SUITE.md)
+- [Model inputs](../data/09_MODEL_INPUTS.md)
+- [Signal router](13_SIGNAL_ROUTER.md)
+- [Model validation](09_MODEL_VALIDATION.md)
+- [Labels, payouts, and EV](../data/06_LABELS_PAYOUTS_AND_EV.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

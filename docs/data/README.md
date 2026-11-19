@@ -27,12 +27,15 @@ Pipeline stages should follow data flow order:
 ```
 data/
 ├── README.md
-├── 01_RAW_INPUTS.md
-├── 02_PROCESSING_LAYER.md
-├── 03_STORAGE_SCHEMA.md
-├── 04_OUTPUT_FORMATS.md
-├── 05_VALIDATION_RULES.md
-└── DATA_CATALOG.md          ← Single reference for all fields
+├── 01_TICK_STREAM.md
+├── 02_ASSET_IDENTITIES.md
+├── 03_CANDLE_AGGREGATION.md
+├── 04_TPO_VALUE_AREA.md
+├── 05_AMT_FEATURE_SPEC.md
+├── 06_LABELS_PAYOUTS_AND_EV.md
+├── 07_TICK_STORE.md
+├── 08_SNAPSHOTS_AND_CONTINUITY.md
+└── 09_MODEL_INPUTS.md
 ```
 
 The `DATA_CATALOG.md` pattern (a single-file reference of every field, its type, source, and description) is highly recommended for projects with many data elements.
@@ -106,4 +109,4 @@ Assertions that must hold for output to be valid.
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

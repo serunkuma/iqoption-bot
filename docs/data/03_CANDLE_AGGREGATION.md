@@ -1,8 +1,8 @@
 # 1-Minute Candle Aggregation
 
-Status: Planning
+Status: Current
 
-> This document specifies how the project will build its own 1-minute OHLCV candles from tick events. Candle generation does not exist yet. The current receiver stores raw messages only.
+> This document specifies how the project builds its own 1-minute OHLCV candles from tick events. Bucketing is implemented in `engine/domain/timeframes.py` and used by the sampler and the diagnostic table. There is no live candle service and no candle store; candles exist only inside a build.
 
 ---
 
@@ -145,7 +145,7 @@ If no ticks arrive during a minute:
 
 Exact duplicate `(timestamp, price)` pairs are dropped before candles and features are built. This keeps tick density from being inflated by repeated frames.
 
-The offline loader implements this rule. Near-duplicates and genuinely repeated prices at different timestamps remain an open question and must be confirmed against real traffic.
+The tick store implements this rule. Near-duplicates and genuinely repeated prices at different timestamps remain an open question and must be confirmed against real traffic.
 
 ---
 
@@ -209,14 +209,18 @@ Additional checks:
 
 ## Storage
 
-Planned tables or files:
+The sampler groups ticks into whole-minute buckets in memory during `build`. No candle table is written. The bucket key, start epoch, tick epochs, and tick prices are kept on the snapshot's `BarSlice` objects, which is all the feature engine needs.
+
+Planned, not implemented:
 
 | Store | Content |
 |-------|---------|
-| Raw ticks | JSONL append log; later SQLite/Parquet |
-| Candles | SQLite table keyed by `(active_id, interval, bucket_start)` |
+| Raw ticks | JSONL capture; Parquet store (current) |
+| Candles | Table keyed by `(active_id, interval, bucket_start)` |
 | Gaps | Table or flags recording missing minutes |
 | Rebuild metadata | Source tick range and aggregation version |
+
+The aggregation version is `CANDLE_VERSION = "1m-clock-v1"`.
 
 ---
 
@@ -225,13 +229,15 @@ Planned tables or files:
 - Confirm whether non-identical repeated prices should count as TPO observations.
 - Confirm behaviour for very low-liquidity instruments with long gaps.
 - Confirm retention: how much raw tick and candle history is required for backtests.
-- Confirm whether the live receiver or the offline build owns candle finalization.
+- Decide whether a candle store is worth adding, given that features read ticks directly.
 
 ---
 
 ## Related Documentation
 
 - [Tick stream contract](01_TICK_STREAM.md)
+- [Tick store](07_TICK_STORE.md)
+- [Snapshots and continuity](08_SNAPSHOTS_AND_CONTINUITY.md)
 - [TPO and Value Area](04_TPO_VALUE_AREA.md)
 - [Labels, payouts, and expected value](06_LABELS_PAYOUTS_AND_EV.md)
 - [Data pipeline](../system/07_DATA_PIPELINE.md)
@@ -239,4 +245,4 @@ Planned tables or files:
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

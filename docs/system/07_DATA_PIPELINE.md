@@ -1,177 +1,136 @@
 # Data Pipeline
 
-Status: Planning
+Status: Current
 
-> This document specifies the path from a browser tick to a versioned training row. Only the first stage exists today.
-
----
-
-## Pipeline Stages
-
-| Stage | Input | Output | Status |
-|-------|-------|--------|--------|
-| Capture | Browser WebSocket frame | Raw JSON frame | Current |
-| Validate | Raw frame | Accepted or rejected tick event | Partial |
-| Persist | Accepted tick event | JSONL raw log; later SQLite/Parquet | Planned |
-| Aggregate | Tick events | 1-minute OHLCV candles | Offline |
-| Profile | Macro-window ticks | POC, VAH, VAL, value-area metrics | Offline |
-| Feature | Profile, ticks, candles, metadata | Feature snapshot, one row per tick | Offline |
-| Label | Ticks, metadata | Tick-horizon direction labels | Offline |
-| Dataset | Features + labels + metadata | Versioned dataset | Planned |
-| Train | Dataset | Model artifact | Planned |
-| Infer | Live features + model | Signal | Planned |
-| Execute | Signal + risk decision | Paper/demo/live order | Planned |
-| Journal | Order and outcome | Trade record | Planned |
-
-"Offline" means implemented in the `amt/` package and tested, but not yet fed by the live receiver.
+> The pipeline runs end to end: browser frame to JSONL capture, Parquet tick store, gated snapshots, feature rows, labels, and a joined dataset. It is batch, offline from the perspective of `build`; only capture is live.
 
 ---
 
-## Data Flow
+## Stages
 
-```text
-Browser WebSocket
-    │
-    ▼
-[Capture] extension inject.js + content.js
-    │
-    ▼
-[Validate] receiver.py
-    │  JSON, envelope, active_id, numeric price
-    ▼
-[Persist] raw ticks (JSONL, one local receipt timestamp)
-    │
-    ▼
-[Aggregate] 1-minute candles
-    │
-    ├──► macro window: last 7 completed candles ──► [Profile] POC / VAH / VAL
-    │                                               [Volatility] sigma_7
-    │
-    ├──► fast window: last 3 completed candles ───┐
-    │                                              │
-    ├──► forming candle: current-minute ticks ────┤
-    │                                              ▼
-    │                                    [Feature engine] one row per tick
-    │                                              │
-    ▼                                              ▼
-[Label builder] tick horizons 60/90/120/180 ─► [Dataset builder]
-                                                   │
-                                                   ▼
-                                            [Train / validate]
-                                                   │
-                                                   ▼
-                                            [Model registry]
-                                                   │
-                                                   ▼
-                                     [Inference] → [Signal] → [Risk] → [Execution]
-```
+| # | Stage | Input | Output | Where |
+|---|-------|-------|--------|-------|
+| 1 | Intercept | Page WebSocket message | Raw JSON payload | `chrome-extension/inject.js` |
+| 2 | Forward | Raw payload | WebSocket frame | `chrome-extension/content.js` |
+| 3 | Accept | Frame | Validated tick with `received_at` | `components/receiver.py` |
+| 4 | Persist | Accepted tick | `data/raw/ticks-<date>.jsonl` | `runner.py serve` |
+| 5 | Load | JSONL / CSV / Parquet | `TickStore` | `engine/store.py` |
+| 6 | Sample | Tick store | `Snapshot` list + exclusion report | `engine/sampler.py` |
+| 7 | Feature | Snapshot | `core16-v1` + `amt-v3` row | `engine/features.py` |
+| 8 | Label | Snapshot | Long-format label rows | `engine/domain/labels.py` |
+| 9 | Join | Feature + label rows | `dataset.parquet` | `engine/build.py` |
+| 10 | Train | Dataset | Calibrated suite | `engine/models.py` |
+| 11 | Backtest | Dataset + suite | Paper trades + reports | `engine/backtest.py` |
+
+Steps 1–4 are live. Steps 5–11 run when commanded, on whatever capture exists.
 
 ---
 
-## Offline First
+## Stage Detail
 
-Build and validate the pipeline offline before running it live:
+### 1–4. Capture
 
-1. Capture raw ticks to JSONL.
-2. Replay the JSONL through the same validation and aggregation code.
-3. Build candles and features from the replay.
-4. Compare live and replay outputs on the same time range.
-5. Only then enable online feature computation.
+The extension forwards only frames whose outer `name` is `"candle-generated"`. The receiver validates the envelope, stamps `received_at` with a local offset, buffers the last 500 payloads per `active_id` in memory, and calls the JSONL sink.
 
-This avoids train/serve skew and makes failures reproducible.
+The broker's `at` and `volume` fields stay inside `payload`. They are evidence, not data. `received_at` is the project's only tick timestamp.
 
----
+### 5. Store
 
-## Storage Layout
+`TickStore` enforces the tick contract: aware timestamp, positive numeric price, optional `active_id`, exact `(timestamp, price)` dedupe, ascending order, contiguous `tick_id`. Load statistics record duplicates and out-of-order rows.
 
-```text
-data/
-├── raw/
-│   └── ticks-2026-11-18.jsonl
-├── candles/
-│   └── candles.sqlite
-├── features/
-│   └── amt-v2/
-│       └── features-2026-11-18.parquet
-├── labels/
-│   └── tick-horizon-v1/
-├── datasets/
-│   └── amt-v2_tick-horizon-v1_2026-11-18.parquet
-├── models/
-│   └── model-2026-11-18/
-└── journals/
-    └── paper-2026-11-18.jsonl
-```
+### 6. Sample
 
-Only `data/` is local and gitignored. Small anonymised fixtures live under `tests/fixtures/`.
+For each whole minute with ticks, the sampler requires `macro_candles` contiguous earlier minutes, dense enough bars, a tick at or before the snapshot offset, and an entry tick inside the delay plus tolerance. It truncates the forming bar at the snapshot time and resolves one exit per horizon from the actual entry time.
+
+### 7. Feature
+
+One row per snapshot. The model vector is the 16 `core16-v1` features; the rest of the row is `amt-v3` diagnostics. The function is stateless and never reads past the snapshot.
+
+### 8. Label
+
+One row per snapshot per horizon: entry and exit prices and timestamps, exit delay, label (`call`/`put`/`tie`/`missing`), `usable`, and the label version.
+
+### 9. Join
+
+Features and labels are merged on `snapshot_id`. The label table's `timestamp` and `active_id` are dropped to avoid colliding with the feature table's own columns. Rows are sorted by `timestamp` then `horizon_seconds` with a stable sort.
 
 ---
 
-## Versioning
+## Dataset Schema
 
-Every derived artifact records:
+| Column | Source | Meaning |
+|--------|--------|---------|
+| `snapshot_id` | Feature | Join key |
+| `timestamp` | Feature | Snapshot time, ISO 8601 with offset |
+| `active_id` | Feature | Instrument |
+| `price` | Feature | Price at the snapshot |
+| `feature_version` | Feature | `amt-v3` |
+| `core_feature_version` | Feature | `core16-v1` |
+| 16 core columns | Feature | Model inputs |
+| 31 diagnostic columns | Feature | Research and debugging |
+| `entry_timestamp` | Label | Actual entry tick time |
+| `entry_price` | Label | Actual entry price |
+| `horizon_seconds` | Label | 60/90/120/180 |
+| `exit_timestamp` | Label | Exit tick time, or null |
+| `exit_price` | Label | Exit price, or null |
+| `exit_delay_seconds` | Label | Delay beyond the exact horizon |
+| `label` | Label | `call`, `put`, `tie`, or `missing` |
+| `usable` | Label | `1` for directional rows |
+| `label_version` | Label | `snapshot-horizon-v1` |
 
-| Field | Example |
-|-------|---------|
-| `feature_version` | `amt-v2` |
-| `label_version` | `tick-horizon-v1` |
-| `candle_version` | `1m-clock-v1` |
-| `dataset_version` | `2026-11-18.1` |
-| `model_version` | `model-2026-11-18` |
-| `code_commit` | Git commit hash |
-| `config_hash` | Hash of the resolved configuration |
-
-A change to bin size, macro/fast window length, `sigma_7`, label definition, or the active instrument requires a version bump.
-
----
-
-## Failure Handling
-
-| Failure | Behaviour |
-|---------|-----------|
-| Malformed frame | Reject, count, sample in logs |
-| Receiver restart | New session ID; gap recorded |
-| Extension disconnect | Reconnect; gap recorded; queue-loss counted |
-| Late tick | Store raw; do not rewrite finalized candle |
-| Missing minute | Emit gap marker; do not synthesize prices |
-| Insufficient ticks | Emit null profile/features; do not impute |
-| Model missing | No trade |
-| Feature version mismatch | No trade |
-| Storage write failure | Stop the pipeline; fail closed |
+`dataset_rows` should equal `snapshots x horizons` when every exit is present. A shortfall means missing exits.
 
 ---
 
-## Scheduling
+## Exclusions
 
-Offline batch jobs:
+Exclusions happen once, in the sampler and the label layer, and are counted:
 
-- Raw-to-candle rebuild: daily or on demand.
-- Feature rebuild: after any feature-version change.
-- Dataset build: after labels or features change.
-- Model retraining: scheduled and event-driven.
-- Backtest: per candidate model.
+| Reason | Accumulates in |
+|--------|----------------|
+| Too little history | `skipped_insufficient_history` |
+| Gap in the macro window | `skipped_gap` |
+| Sparse completed bar | `skipped_sparse_bar` |
+| No tick at or before the offset | `skipped_no_pre_offset_tick` |
+| No entry tick | `skipped_no_entry_tick` |
+| Missing exit | `snapshots_with_missing_exits`, `usable = 0` |
+| Tie with `exclude` | `usable = 0` |
 
-Online jobs:
+Nothing is imputed, interpolated, or backfilled.
 
-- Tick validation and persistence: continuous.
-- Candle finalization: every minute.
-- Feature snapshot: on every accepted tick.
-- Inference: on every accepted tick, or on a configured subsample.
-- Monitoring: continuous.
+---
 
-The offline feature engine is batch-oriented: it groups sorted ticks into candles and updates the profile and `sigma_7` once per completed candle. Moving to live inference requires the same functions with incremental state, which is a separate task.
+## Rebuilds and Determinism
+
+Given the same capture file and the same configuration, `build` produces byte-comparable rows: sorting is stable, `tick_id` is reassigned deterministically, and no timestamp depends on the wall clock.
+
+Changing any of the following requires a full rebuild and a version bump where applicable:
+
+- `candles.interval_seconds`
+- `context.*`
+- `snapshot.*`
+- `instrument.bin_size`
+- feature definitions
+
+---
+
+## What the Pipeline Does Not Do
+
+- It does not stream: `build` reads a file, not a live socket.
+- It does not write candles to storage; minute buckets exist only inside the build.
+- It does not append incrementally to an existing store.
+- It does not handle multiple instruments; the sampler filters to one.
+- It does not run live features or live signals.
 
 ---
 
 ## Related Documentation
 
-- [Tick stream contract](../data/01_TICK_STREAM.md)
-- [1-minute candle aggregation](../data/03_CANDLE_AGGREGATION.md)
-- [TPO and Value Area](../data/04_TPO_VALUE_AREA.md)
-- [AMT Feature Specification](../data/05_AMT_FEATURE_SPEC.md)
-- [ML Pipeline](08_ML_PIPELINE.md)
-- [Model Validation](09_MODEL_VALIDATION.md)
+- [Tick store](../data/07_TICK_STORE.md)
+- [Snapshots and continuity](../data/08_SNAPSHOTS_AND_CONTINUITY.md)
+- [Model inputs](../data/09_MODEL_INPUTS.md)
+- [Runtime and entry point](11_RUNTIME_AND_ENTRYPOINT.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

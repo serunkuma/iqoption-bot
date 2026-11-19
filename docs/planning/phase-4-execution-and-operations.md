@@ -4,6 +4,8 @@ Status: Planning
 
 > **Objective:** Add paper/demo execution, hard risk controls, monitoring, and operational procedures. Live execution is a separate, explicit decision.
 
+> **State:** An in-process paper broker and backtest replay exist. There is no live paper loop, no demo adapter, no risk layer, and no kill switch.
+
 ---
 
 ## Scope
@@ -22,10 +24,14 @@ Status: Planning
 
 ### Paper trading
 
-- [ ] Implement a paper execution adapter.
-- [ ] Simulate entry, expiry, outcome, and PnL.
-- [ ] Persist every paper trade and its reason.
-- [ ] Compare paper results with offline backtest results.
+- [x] Implement an in-process paper broker.
+- [x] Simulate entry, expiry, outcome, and PnL.
+- [x] Enforce a one-open-trade limit.
+- [x] Void ties instead of mapping them to a direction.
+- [x] Replay the paper broker over held-out probabilities.
+- [ ] Implement a live paper loop that consumes new snapshots.
+- [ ] Persist every paper trade and its reason from the live loop.
+- [ ] Compare live paper results with offline backtest results.
 
 ### Demo execution
 
@@ -37,9 +43,11 @@ Status: Planning
 
 ### Risk
 
-- [ ] Implement maximum stake.
-- [ ] Implement daily loss limit.
-- [ ] Implement maximum consecutive losses.
+- [x] Implement a fixed stake.
+- [x] Implement a maximum open-trade count.
+- [ ] Implement a maximum stake policy beyond a single value.
+- [ ] Implement a daily loss limit.
+- [ ] Implement a maximum consecutive-loss limit.
 - [ ] Implement exposure limits.
 - [ ] Implement a manual kill switch.
 - [ ] Fail closed on data-quality or model-version problems.
@@ -47,6 +55,8 @@ Status: Planning
 
 ### Journal and audit
 
+- [x] Provide a JSONL trade journal writer.
+- [ ] Wire the journal into the backtest and the live loop.
 - [ ] Persist signals, risk decisions, orders, fills, outcomes, and PnL.
 - [ ] Record model and feature versions per trade.
 - [ ] Record payout and expiry per trade.
@@ -61,7 +71,7 @@ Status: Planning
 
 ### Operations
 
-- [ ] Complete the RUNBOOK with start, stop, restart, and troubleshooting.
+- [ ] Complete the RUNBOOK with start, stop, restart, and troubleshooting for every command.
 - [ ] Test the runbook end to end.
 - [ ] Define backup and retention.
 - [ ] Define incident response.
@@ -106,6 +116,7 @@ Status: Planning
 
 ## Related Documentation
 
+- [Execution and resolution](../system/14_EXECUTION_AND_RESOLUTION.md)
 - [Security and Safety](../system/06_SECURITY.md)
 - [Model Validation](../system/09_MODEL_VALIDATION.md)
 - [RUNBOOK](../../RUNBOOK.md)
@@ -113,4 +124,4 @@ Status: Planning
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

@@ -27,7 +27,7 @@ The primary instrument key is `active_id`, supplied in every accepted tick paylo
 - The mapping only changes log labels. It does not filter, rename, or modify ticks.
 - An unmapped `active_id` is still processed and logged as `unmapped`.
 
-`receiver.py` loads the map at startup and validates it with `load_asset_names`.
+`components/receiver.py` loads the map at startup and validates it with `load_asset_names`.
 
 ---
 
@@ -51,14 +51,27 @@ These fields are optional and inconsistent. They are not a substitute for a cano
 
 ---
 
+## Metadata That Is Configured, Not Discovered
+
+The engine does not read instrument metadata from the feed. Three values are configured in `config/default.toml` for the single active instrument:
+
+| Value | Config key | Used by |
+|-------|------------|---------|
+| Active instrument | `instrument.active_id` | Sampler filter |
+| Price bin width | `instrument.bin_size` | TPO profile |
+| Pip size | `instrument.pip_size` | Reserved; not yet consumed |
+| Payout per horizon | `router.payouts` | EV and the trade hurdle |
+
+These are operator-supplied assumptions. They must be checked manually and updated when the platform changes them.
+
+---
+
 ## Missing Metadata
 
 The current project does not know, per `active_id`:
 
 - Instrument type (forex, crypto, stock, index, commodity, OTC).
-- Pip size or tick size.
-- Payout rate.
-- Available expiry durations.
+- Available expiry durations as offered by the platform.
 - Trading session and weekend/OTC status.
 - Minimum and maximum stake.
 - Currency.
@@ -131,4 +144,4 @@ Payout and expiry values may change over time. If the platform exposes them dyna
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

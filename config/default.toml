@@ -1,4 +1,4 @@
-# AMT pipeline configuration.
+# IQ Option bot engine configuration.
 # One active instrument at a time. Multi-instrument is a future item.
 
 [instrument]
@@ -20,12 +20,52 @@ single_print_max_ticks = 1
 volatility_min_changes = 10
 epsilon = 1e-9
 
+[snapshot]
+# Evaluation points inside the forming minute. Default: one per minute at :30.
+offsets_seconds = [30]
+entry_delay_ms = 250
+entry_tolerance_seconds = 1.0
+exit_tolerance_seconds = 5.0
+min_ticks_per_bar = 1
+
 [labels]
 horizons_seconds = [60, 90, 120, 180]
-exit_tolerance_seconds = 5.0
 tie_policy = "exclude"
+
+[router]
+min_ev = 0.03
+tie_break = "earliest_horizon"
+
+[router.payouts]
+60 = 0.80
+90 = 0.82
+120 = 0.84
+180 = 0.86
+
+[models]
+engine = "lightgbm"
+calibration = "auto"
+purge_seconds = 180
+embargo_seconds = 0
+n_splits = 5
+min_train_rows = 500
+random_seed = 7
+n_estimators = 300
+learning_rate = 0.03
+num_leaves = 15
+min_child_samples = 50
+
+[execution]
+mode = "paper"
+stake = 1.0
+max_open_trades = 1
+
+[store]
+root = "data"
+ticks_path = "data/ticks.parquet"
+snapshots_path = "data/snapshots.parquet"
+models_path = "data/models"
+reports_path = "reports"
 
 [data]
 input_path = "data/ticks.csv"
-features_path = "data/features.csv"
-labels_path = "data/labels.csv"

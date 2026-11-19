@@ -1,7 +1,13 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from amt.timeframes import Tick, bucket_key, completed_window, group_candles, window_has_gap
+from engine.domain.timeframes import (
+    Tick,
+    bucket_key,
+    completed_window,
+    group_candles,
+    window_has_gap,
+)
 
 BASE = datetime(2026, 11, 18, 12, 0, 0, tzinfo=timezone.utc)
 

@@ -16,7 +16,7 @@ IQ Option Traderoom (browser)
     -> chrome-extension/inject.js
     -> chrome-extension/content.js
     -> ws://localhost:8765
-    -> receiver.py console output
+    -> components/receiver.py console output
 ```
 
 The receiver was started locally, the unpacked extension was loaded in Chrome, and an IQ Option page was opened and left running.
@@ -72,6 +72,16 @@ The next step is Phase 1 hardening, not modelling. See [Phase 1](../planning/pha
 3. Add `received_at` and persist raw frames.
 4. Add quality counters and gap tracking.
 5. Fix the README wording that described the in-memory buffer as candle history.
+
+### Follow-up status, 2026-11-19
+
+| Item | State |
+|------|-------|
+| 3. `received_at` and raw persistence | Done — `components/receiver.py` stamps it; `runner.py serve` writes daily JSONL |
+| 4. Quality counters | Partly — duplicate and ordering counters exist at build time; receiver-level counters remain open |
+| 5. README wording | Done |
+
+Items 1 and 2 remain open and are tracked in [Phase 1](../planning/phase-1-tick-capture-hardening.md).
 
 ---
 

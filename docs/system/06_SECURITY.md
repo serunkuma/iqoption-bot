@@ -18,7 +18,7 @@ Status: Current
 | Secrets in repo | None detected |
 | Logging | Plain text; no credentials logged today |
 
-The PoC is designed for a single local machine. It is not safe to expose the receiver to a network or the internet as-is.
+The capture layer is designed for a single local machine. It is not safe to expose the receiver to a network or the internet as-is. The analysis engine and the paper broker run locally in-process and touch no network resources.
 
 ---
 
@@ -56,7 +56,7 @@ Rules:
 
 ## Live-Trading Safety
 
-The current project cannot place trades. Before any execution component is enabled:
+The current project cannot place trades. `engine/execution.py` simulates paper trades only; `demo` and `live` are accepted by the config validator and then rejected with `ExecutionError`. Before any execution component is enabled:
 
 - Paper mode must be the default.
 - Demo mode must be tested before live mode.
@@ -92,10 +92,11 @@ The current project cannot place trades. Before any execution component is enabl
 ## Related Documentation
 
 - [Configuration](03_CONFIGURATION.md)
+- [Execution and resolution](14_EXECUTION_AND_RESOLUTION.md)
 - [Model Validation](09_MODEL_VALIDATION.md)
 - [Limitations and backlog](10_LIMITATIONS_AND_BACKLOG.md)
 - [RUNBOOK](../../RUNBOOK.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

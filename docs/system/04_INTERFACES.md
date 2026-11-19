@@ -2,7 +2,7 @@
 
 Status: Current
 
-> This document defines the interfaces between the browser extension and the receiver, and the planned internal contracts between pipeline components.
+> External interfaces: browser extension to receiver, receiver to sink, and file formats. Internal interfaces: tick store, snapshot, feature vector, signal proposal, and trade.
 
 ---
 
@@ -15,12 +15,13 @@ Status: Current
 | Protocol | WebSocket |
 | URL | `ws://localhost:8765` |
 | Direction | Extension to receiver |
-| Authentication | None (localhost only) |
-| Max frame size | 1 MiB in the receiver |
+| Authentication | None; localhost only |
+| Max frame size | 1 MiB |
+| Ping interval / timeout | 20 s / 20 s |
 
-### Message
+### Frame
 
-The extension forwards the original JSON string from the page WebSocket.
+The extension forwards the page's original JSON string.
 
 ```json
 {
@@ -39,158 +40,156 @@ The extension forwards the original JSON string from the page WebSocket.
 }
 ```
 
-### Receiver Acceptance Rules
+### Acceptance Rules
 
 The receiver accepts a frame only when:
 
-- It is valid JSON.
-- It is a JSON object.
-- `name == "candle-generated"`.
-- `msg` is a JSON object.
+- it parses as JSON,
+- it is a JSON object,
+- `name == "candle-generated"`,
+- `msg` is a JSON object,
 - `msg.active_id` is present.
 
-Everything else is ignored or logged as malformed.
+Accepted frames get `received_at` (ISO 8601 with offset) if absent. Rejected frames are logged and dropped. The receiver does not check `close` is numeric and positive; the tick store does that at build time, so a bad price is rejected in one place with a line number.
 
-### Connection Behaviour
-
-- The extension reconnects every 2 seconds after a disconnect.
-- While disconnected, it queues up to 500 messages.
-- When the queue is full, it drops the oldest message and logs a warning.
-- The receiver handles one or more client connections but keeps shared per-`active_id` state.
-
-### Error Handling
-
-| Condition | Current behaviour | Planned behaviour |
-|-----------|-------------------|-------------------|
-| Malformed JSON | Log and ignore | Count and sample |
-| Missing `msg` | Log and ignore | Count and sample |
-| Missing `active_id` | Log and ignore | Count and sample |
-| Unknown message type | Ignore | Count; optionally capture for schema discovery |
-| Receiver unavailable | Extension reconnects | Same, with queue metrics |
-| Queue full | Drop oldest | Expose dropped count to the receiver or logs |
+`msg.at` and `msg.volume` are stored but never promoted or trusted.
 
 ---
 
-## Planned Internal Contracts
+## Receiver to Sink
 
-These contracts do not exist yet. They are defined here so components can be built against a stable shape.
-
-### Tick Event
-
-```json
-{
-  "active_id": 42,
-  "symbol": "EURUSD",
-  "price": 1.25,
-  "timestamp": "2026-11-18T13:00:02.130+01:00",
-  "session_id": "session-uuid",
-  "connection_id": "connection-uuid",
-  "quality_flags": []
-}
+```python
+set_tick_sink(sink: Callable[[Any, dict], None] | None)
 ```
 
-`timestamp` is the receiver's local receipt time. There is no separate event timestamp in this contract.
+The sink is called as `sink(active_id, tick_data)` after validation and buffering. Exceptions are logged and swallowed so capture cannot be killed by a disk error.
 
-### 1-Minute Candle
+`JsonlTickSink` writes one record per accepted tick:
 
-```json
-{
-  "active_id": 42,
-  "interval": 60,
-  "bucket_start": "2026-11-18T13:00:00+01:00",
-  "open": 1.25,
-  "high": 1.251,
-  "low": 1.2492,
-  "close": 1.251,
-  "tick_count": 4,
-  "is_complete": true,
-  "quality_flags": []
-}
-```
+| Field | Type | Meaning |
+|-------|------|---------|
+| `received_at` | ISO 8601 string with offset | Local receipt time |
+| `active_id` | int or string | Instrument key as received |
+| `price` | float | `msg.close` |
+| `payload` | object | Full original `msg`, unmodified |
 
-### Feature Snapshot
-
-```json
-{
-  "tick_id": 1284,
-  "active_id": 42,
-  "timestamp": "2026-11-18T13:01:07.412+01:00",
-  "feature_version": "amt-v2",
-  "features": {
-    "price": 1.2505,
-    "poc": 1.25025,
-    "vah": 1.251,
-    "val": 1.2495,
-    "sigma_7": 0.00012,
-    "z_poc": 2.08,
-    "z_vah": -4.17,
-    "z_val": 8.33,
-    "inside_va": 1,
-    "tick_rate_7": 1.4,
-    "tick_rate_3": 2.1,
-    "tick_rate_forming": 3.0,
-    "tick_rate_3_7": 1.5,
-    "tick_rate_forming_3": 1.43
-  }
-}
-```
-
-### Signal
-
-```json
-{
-  "tick_id": 1284,
-  "active_id": 42,
-  "timestamp": "2026-11-18T13:01:07.412+01:00",
-  "horizon_seconds": 60,
-  "direction": "call",
-  "probability": 0.57,
-  "payout": 0.82,
-  "expected_value": 0.0194,
-  "model_version": "model-2026-11-18",
-  "reason": "balance_model"
-}
-```
-
-`direction` is one of `call`, `put`, or `no_trade`. A missing or ambiguous feature snapshot must produce `no_trade` with a reason code.
-
-### Order and Trade Result
-
-```json
-{
-  "order_id": "order-uuid",
-  "mode": "paper",
-  "active_id": 42,
-  "direction": "call",
-  "stake": 1.0,
-  "entry_at": "2026-11-18T12:01:00Z",
-  "expiry_at": "2026-11-18T12:02:00Z",
-  "status": "filled",
-  "outcome": "win",
-  "pnl": 0.82
-}
-```
+Daily files are `data/raw/ticks-YYYY-MM-DD.jsonl`, named by the UTC date of `received_at`.
 
 ---
 
-## Interface Rules
+## File Formats
 
-1. Every payload has a versioned schema.
-2. Every timestamp is ISO 8601 with an explicit UTC offset.
-3. Ticks carry exactly one timestamp: the receiver's local receipt time.
-4. Optional fields are nullable, not omitted inconsistently.
-5. Unknown fields are preserved in raw storage.
-6. Schema changes require a version bump and a migration note.
+| File | Written by | Consumed by |
+|------|------------|-------------|
+| `data/raw/ticks-<date>.jsonl` | `serve` | `build --input`, `diagnose` |
+| `data/ticks.parquet` | `build` | `build --input` |
+| `data/features.parquet` | `build` | research |
+| `data/labels.parquet` | `build` | research |
+| `data/dataset.parquet` | `build` | `train`, `backtest` |
+| `data/models/suite.pkl` | `train` | `backtest` |
+| `reports/backtest.json` | `backtest` | humans, tooling |
+| `reports/backtest.md` | `backtest` | humans |
+
+CSV import is an operator convenience: `timestamp,price[,active_id]`, ISO 8601 with offset. Parquet is the durable format.
+
+---
+
+## Tick Store Interface
+
+| Member | Contract |
+|--------|----------|
+| `timestamp` | UTC, never null |
+| `price` | Positive float, never null |
+| `active_id` | Nullable integer |
+| `utc_offset_seconds` | Original offset |
+| `tick_id` | Store-assigned, contiguous, ascending by time |
+| `.frame` | Read-only view; callers must not mutate |
+| `.last_price_at(t)` | Last price at or before `t`; null before the first tick |
+| `.price_at(ts)` | Backward as-of merge, one row per query |
+
+The store guarantees that no lookup returns a future price.
+
+---
+
+## Snapshot Interface
+
+A snapshot is the only object a feature function may consume.
+
+| Field | Contract |
+|-------|----------|
+| `snapshot_id` | Unique within one build |
+| `snapshot_time` | Decision time; features may use ticks `<=` this |
+| `completed_bars` | Exactly `macro_candles` contiguous bars |
+| `forming_bar` | Truncated at `snapshot_time` |
+| `entry_timestamp` / `entry_price` | Resolved delayed entry |
+| `outcomes[horizon]` | Exit timestamp, price, delay, label |
+
+Downstream code must not read ticks directly; otherwise the causality slice can be bypassed.
+
+---
+
+## Feature Interface
+
+```python
+FeatureVector.core       -> dict[str, float | None]   # 16 keys, fixed order
+FeatureVector.values()   -> tuple[float | None, ...]
+FeatureVector.complete() -> bool
+snapshot_feature_row()   -> flat dict for Parquet
+```
+
+The core dict must contain exactly `CORE_FEATURES` in the declared order. `ModelSuite` stores that order and trains on it, so a reordering is a breaking change requiring a version bump.
+
+---
+
+## Proposal Interface
+
+| Field | Contract |
+|-------|----------|
+| `horizon_seconds` | One configured horizon, or the best rejected one |
+| `direction` | `call`, `put`, or `no_trade` |
+| `probability` | Probability of the chosen direction |
+| `payout` | Payout used for EV |
+| `expected_value` | EV per unit stake |
+| `reason` | One of the four reason codes |
+| `actionable` | True only for `selected` with a direction |
+
+---
+
+## Trade Interface
+
+| Field | Contract |
+|-------|----------|
+| `entry_timestamp` / `entry_price` | Actual entry tick |
+| `expiry_timestamp` | `entry_timestamp + horizon_seconds` |
+| `status` | `open`, `won`, `lost`, `void` |
+| `pnl` | `+stake * payout`, `-stake`, or `0` |
+| `resolve(exit_price)` | Exactly once |
+
+---
+
+## Versioning
+
+Every artefact records the versions that produced it:
+
+| Version | Where stored |
+|---------|--------------|
+| `feature_version` | Feature rows, dataset, suite |
+| `core_feature_version` | Feature rows, dataset, suite |
+| `label_version` | Label rows, dataset, suite |
+| `config_hash` | Build summary, suite |
+| `trained_at` | Suite |
+
+A consumer that does not recognise a version must refuse the artefact rather than guess.
 
 ---
 
 ## Related Documentation
 
-- [Tick stream contract](../data/01_TICK_STREAM.md)
-- [1-minute candle aggregation](../data/03_CANDLE_AGGREGATION.md)
+- [Components](02_COMPONENTS.md)
 - [Configuration](03_CONFIGURATION.md)
-- [Data pipeline](07_DATA_PIPELINE.md)
+- [Tick store](../data/07_TICK_STORE.md)
+- [Snapshots and continuity](../data/08_SNAPSHOTS_AND_CONTINUITY.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

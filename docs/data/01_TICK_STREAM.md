@@ -8,7 +8,7 @@ Status: Current
 
 ## Definition
 
-In this project, a **tick event** is one live price update forwarded by the Chrome extension and accepted by `receiver.py`.
+In this project, a **tick event** is one live price update forwarded by the Chrome extension and accepted by `components/receiver.py`.
 
 A tick event is **not** an exchange trade print. It is a broker-originated price update observed through the browser's WebSocket connection. The payload does not contain true traded volume or Level 2 depth.
 
@@ -18,7 +18,7 @@ The IQ Option message envelope currently uses the name `candle-generated`. That 
 
 ## Current Envelope
 
-The extension forwards the original JSON string. `receiver.py` parses it and expects:
+The extension forwards the original JSON string. `components/receiver.py` parses it and expects:
 
 ```json
 {
@@ -70,15 +70,16 @@ The receiver recognises the identity fields above when formatting logs. They are
 
 ## Receiver Behaviour
 
-`receiver.py` currently performs these steps:
+`components/receiver.py` currently performs these steps:
 
 1. Parse the raw frame as JSON. Malformed JSON is logged and ignored.
 2. Require a JSON object with `name == "candle-generated"`.
 3. Require `msg` to be an object.
 4. Require `msg.active_id` to be present.
-5. Copy `msg` into a dictionary.
+5. Copy `msg` into a dictionary and stamp `received_at` if absent.
 6. Append the dictionary to `history_by_active_id[active_id]`.
 7. Call `process_tick`, which logs OHLCV values and the current buffer length.
+8. Call the optional tick sink, which `runner.py serve` wires to the JSONL writer.
 
 ### Buffer Semantics
 
@@ -97,8 +98,8 @@ The project uses **one timestamp**: the receiver's local receipt time.
 
 | Time | Source | Status |
 |------|--------|--------|
-| Receipt time | Receiver clock, captured when the frame is accepted | Decided; not recorded by the current receiver |
-| Payload `at` | `msg.at` | Ignored for now |
+| Receipt time | Receiver clock, captured when the frame is accepted | Implemented: stamped as `received_at` |
+| Payload `at` | `msg.at` | Stored inside the raw payload; never promoted |
 
 `msg.at` is not used for ordering, bucketing, or labels. Its semantics remain unverified and it may be a candle start, a partial-candle marker, or a broker-specific value.
 
@@ -121,21 +122,22 @@ The project uses **one timestamp**: the receiver's local receipt time.
 - Outer `name` must equal `"candle-generated"`.
 - `msg` must be an object.
 - `active_id` must be present.
+- Every accepted frame is stamped with `received_at`.
+- Accepted ticks can be appended to a daily JSONL capture.
 - Asset-name files must map string keys to non-empty string values.
+- The tick store rejects naive timestamps, non-numeric prices, non-positive prices, and `active_id` mismatches.
+- Exact `(timestamp, price)` duplicates are dropped when the store is built.
+- Out-of-order rows are counted and sorted.
 
-### Planned Before AMT Work
+### Planned
 
 | Rule | Purpose |
 |------|---------|
-| Require numeric `close` | Reject frames without a usable price |
-| Record `received_at` | Establish local ordering |
-| Detect duplicate frames | Avoid inflating tick density |
-| Detect out-of-order events | Protect causal feature windows |
-| Detect gaps and reconnects | Mark periods with missing data |
+| Reject non-numeric `close` at the receiver | Fail earlier than the build |
+| Detect duplicate frames at capture time | Avoid writing duplicates to disk |
+| Detect gaps and reconnects | Mark periods with missing data explicitly |
 | Track message rate per `active_id` | Detect stale or stalled instruments |
-| Validate `active_id` type | Keep storage keys consistent |
 | Flag unknown/renamed message types | Detect feed schema drift |
-| Store the raw frame | Support replay and audits |
 | Count dropped extension-queue messages | Make data loss visible |
 
 ### Invalid-Frame Policy
@@ -151,19 +153,21 @@ Invalid frames must be counted and sampled in logs, not silently discarded. The 
 
 ---
 
-## Planned Persistence
+## Persistence
 
-The proof of concept does not persist ticks. The planned raw-capture format is JSONL:
+`runner.py serve` persists accepted ticks as JSONL, one file per UTC day under `data/raw/`:
 
 ```json
-{"received_at":"2026-11-18T13:00:00.123+01:00","session_id":"...","connection_id":"...","active_id":42,"raw":{...}}
+{"received_at":"2026-11-18T13:00:00.123+01:00","active_id":42,"price":1.25,"payload":{"close":1.25,"at":123}}
 ```
 
-JSONL is chosen first because it is append-only, easy to inspect, and replayable. SQLite or Parquet can follow once query and volume requirements are clearer. The payload `at` value stays inside `raw` and is not promoted to a timestamp column.
+JSONL is chosen first because it is append-only, easy to inspect, and replayable. `build` reads it into the Parquet tick store. The payload `at` value stays inside `payload` and is never promoted to a timestamp column.
+
+Passing `--raw-dir ''` disables persistence for a capture-only session.
 
 ### Duplicate Rule
 
-The offline loader drops exact `(timestamp, price)` duplicates before building features. This prevents repeated frames from inflating tick density. Near-duplicates and genuinely repeated prices are still an open question.
+The tick store drops exact `(timestamp, price)` duplicates before snapshots are built. This prevents repeated frames from inflating tick density. Near-duplicates and genuinely repeated prices are still an open question.
 
 ---
 
@@ -180,6 +184,7 @@ The offline loader drops exact `(timestamp, price)` duplicates before building f
 ## Related Documentation
 
 - [System overview](../system/01_OVERVIEW.md)
+- [Tick store](07_TICK_STORE.md)
 - [1-minute candle aggregation](03_CANDLE_AGGREGATION.md)
 - [Asset identities](02_ASSET_IDENTITIES.md)
 - [Limitations and improvement backlog](../system/10_LIMITATIONS_AND_BACKLOG.md)
@@ -187,4 +192,4 @@ The offline loader drops exact `(timestamp, price)` duplicates before building f
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

@@ -4,7 +4,7 @@ import unittest
 
 import websockets
 
-import receiver
+from components import receiver
 
 
 class ReceiverTests(unittest.IsolatedAsyncioTestCase):
@@ -46,8 +46,47 @@ class ReceiverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0]["interval"], 60)
         self.assertEqual(history[0]["symbol"], "EURUSD")
+        self.assertIn("received_at", history[0])
         self.assertTrue(any("asset=EUR/USD active_id=42" in line for line in logs.output))
         self.assertTrue(any("payload_identity=[symbol=EURUSD]" in line for line in logs.output))
+
+    def test_receipt_time_is_added_and_original_payload_is_kept(self) -> None:
+        receiver.history_by_active_id.clear()
+        frame = json.dumps(
+            {"name": "candle-generated", "msg": {"active_id": 7, "close": 1.1, "at": 999}}
+        )
+
+        accepted = receiver.accept_frame(frame)
+
+        self.assertTrue(accepted)
+        stored = receiver.history_by_active_id[7][0]
+        self.assertEqual(stored["at"], 999)
+        self.assertIn("received_at", stored)
+
+    def test_malformed_frame_is_rejected(self) -> None:
+        receiver.history_by_active_id.clear()
+        self.assertFalse(receiver.accept_frame("{not json"))
+        self.assertFalse(receiver.accept_frame(json.dumps({"name": "other"})))
+        self.assertFalse(
+            receiver.accept_frame(json.dumps({"name": "candle-generated", "msg": {}}))
+        )
+        self.assertEqual(len(receiver.history_by_active_id), 0)
+
+    def test_tick_sink_receives_accepted_ticks(self) -> None:
+        receiver.history_by_active_id.clear()
+        seen: list[tuple] = []
+        receiver.set_tick_sink(lambda active_id, payload: seen.append((active_id, payload)))
+        try:
+            receiver.accept_frame(
+                json.dumps(
+                    {"name": "candle-generated", "msg": {"active_id": 5, "close": 1.2}}
+                )
+            )
+        finally:
+            receiver.set_tick_sink(None)
+
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][0], 5)
 
     def test_loads_local_asset_names(self) -> None:
         from pathlib import Path

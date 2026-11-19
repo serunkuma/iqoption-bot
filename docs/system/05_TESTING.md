@@ -2,157 +2,127 @@
 
 Status: Current
 
-> This document describes the tests that exist today, how to run them, and the test layers required before the system can be trusted with trading logic.
+> The engine is tested with `unittest` at the component boundary: each module is exercised with real objects, synthetic ticks, and explicit failure cases. There is no live-to-offline parity test yet, because there is no live inference path.
 
 ---
 
-## Current Tests
-
-### Receiver
-
-`test_receiver.py` uses `unittest` and covers:
-
-1. Identity formatting when no local asset name is mapped.
-2. Buffering and logging when a valid candle-shaped frame arrives.
-3. Loading a valid `asset_names.json` file.
-
-### AMT pipeline
-
-`tests/` uses `unittest` and covers the offline `amt` package:
-
-| File | Coverage |
-|------|----------|
-| `test_config.py` | Default config, unknown keys, window validation, horizon ordering |
-| `test_data.py` | Sorting, exact dedupe, offset requirement, `active_id` mismatch, missing columns |
-| `test_timeframes.py` | Minute bucketing, forming-candle exclusion, gap detection, sorted input |
-| `test_profile.py` | Worked example, POC tie-breaks, bin edges, single bin, internal gap, insufficient ticks |
-| `test_features.py` | One row per tick, null context, layer ratios, forming candle exclusion, causal prefix equality |
-| `test_labels.py` | Exit selection, tolerance, ties, missing exits, multi-horizon output |
-
-### Run
+## Running the Tests
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest -v test_receiver
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
-.\.venv\Scripts\python.exe -m amt.build --input data\ticks.csv
 ```
 
-### Current Gaps
+Import `engine` before pandas in any ad-hoc script; see the Windows LightGBM caveat below.
 
-- No test for malformed JSON.
-- No test for a frame without `msg`.
-- No test for a frame without `active_id`.
-- No test for buffer eviction at 500 entries.
-- No test for reconnect behaviour in `content.js`.
-- No test for the extension queue dropping the oldest message.
-- No test for `load_asset_names` rejecting invalid files.
-- No integration test that starts the receiver and sends multiple frames.
-- No end-to-end test from live receiver to feature rows.
-- No load or soak test.
+Expected tail:
+
+```text
+Ran 111 tests in 15.5s
+
+OK
+```
 
 ---
 
-## Documentation Checks
+## Coverage by File
 
-The previous `scripts/validate_scaffold.*` validators were scaffolding. Until CI is added, run this manual checklist after structural documentation changes:
-
-1. Every `.md` file under `docs/` starts with a status label: `Status: Current`, `Status: Planning`, or `Status: Historical`.
-2. Every link in `docs/index.md` resolves to an existing file.
-3. No document links to `sources/` or `scripts/`.
-4. `AGENTS.md`, `README.md`, and `RUNBOOK.md` agree on layout and commands.
-5. Commands use the virtual environment path, not bare `python`.
-6. Feature and label versions referenced in docs match `amt/config.py`.
-
-Automate this with `tests/test_docs.py` when CI exists.
-
----
-
-## Planned Test Layers
-
-| Layer | Scope | Examples |
-|-------|-------|----------|
-| Unit | Pure functions and models | Asset validation, identity formatting, binning, POC, Value Area, labels, EV |
-| Contract | Message schemas | Tick envelope, candle record, feature snapshot, signal |
-| Integration | Receiver plus sender | Start receiver, send valid and invalid frames, assert counts and storage |
-| Replay | Stored raw ticks | Rebuild candles and features from a fixed JSONL fixture |
-| Property-based | Invariants | OHLC invariants, Value Area containment, no-lookahead windows |
-| Load | Throughput and backpressure | Sustained message rate, queue behaviour, memory growth |
-| Model validation | Offline research | Walk-forward splits, calibration, drift checks |
-| End-to-end | Paper mode | Tick replay to signal to paper order to journal |
+| File | Tests | Covers |
+|------|-------|--------|
+| `test_config.py` | 10 | Defaults, unknown keys, section types, offset uniqueness and range, horizon ordering, payout coverage, mode validation, config hash stability |
+| `test_store.py` | 10 | CSV contract, naive timestamp rejection, non-positive price, `active_id` mismatch, dedupe, ordering, `tick_id` on reload, point-in-time lookups |
+| `test_timeframes.py` | 7 | Bucket boundaries, forming vs completed, gap detection, unsorted input, tick counts |
+| `test_profile.py` | 6 | Worked example, POC tie-breaks, bin edges, single bin, internal gap, insufficient ticks |
+| `test_sampler.py` | 11 | Continuity gate, insufficient history, gaps, sparse bars, offset slicing, entry delay, exit tolerance, missing exits, single-instrument filtering |
+| `test_features.py` | 9 | Exact core feature list and order, null propagation, layer ratios, forming truncation, profile/volatility missing flags, diagnostic table parity |
+| `test_labels.py` | 7 | Call/put/tie classification, tie policy, missing exits, long-format rows, label version |
+| `test_models.py` | 13 | Overlap weights, calibrator monotonicity, rejected Platt slope, identity clipping, per-horizon training, evaluation table shape, held-out slice disjoint from calibration, skipped horizons, pickle round-trip |
+| `test_router.py` | 10 | EV math, breakeven, call/put candidate selection, hurdle rejection, reason codes, tie-break modes, malformed probabilities |
+| `test_execution.py` | 11 | Mode rejection, open limits, expired-trade slot release, win/loss/void resolution, double resolve, summary, journal |
+| `test_backtest.py` | 5 | Only held-out snapshots routed, trades reference evaluated snapshots, one-open-trade limit, no-model no-trade, horizon resolution |
+| `test_reports.py` | 6 | Reliability bins, Brier/AUC/ECE, single-class safety, concurrency, JSON/Markdown writing without `tabulate` |
+| `test_receiver.py` | 5 | Identity formatting, acceptance and buffering, rejection paths, asset-map loading |
 
 ---
 
-## Required Invariants
+## Test Helpers
 
-### Tick ingestion
+`tests/helpers.py` provides:
 
-- A malformed frame never reaches storage.
-- A frame without `active_id` is rejected.
-- Accepted frames always have `received_at`.
-- Duplicate policy is deterministic.
+| Helper | Purpose |
+|--------|---------|
+| `make_config(**sections)` | Build a validated `Config` with small, fast model settings |
+| `synthetic_ticks(...)` | Deterministic rising ticks, one per second |
+| `synthetic_walk_ticks(...)` | Seeded random walk that produces both call and put labels |
 
-### Candles
+`make_config` lowers `min_train_rows`, `n_estimators`, and `num_leaves` so model tests finish in seconds while still exercising the real code path.
 
-- `low <= open <= high`.
-- `low <= close <= high`.
-- `tick_count >= 1`.
-- Bucket boundaries are 60 seconds.
-- A finalized candle is not silently rewritten.
-
-### TPO / Value Area
-
-- `VAL <= POC <= VAH`.
-- The value area contains at least the target share unless all bins are included.
-- A profile with fewer than the minimum ticks is null, never synthesised.
-- A feature snapshot uses no tick with a timestamp later than the decision tick.
-
-### Labels and EV
-
-- A label never appears in its own feature row.
-- Train/validation/test splits are chronological.
-- Payout breakeven matches the formula.
-- A tie is never mapped to a directional label.
-- A missing exit is never mapped to a directional label.
-- Purge length covers the longest horizon plus tolerance.
-
-### Execution
-
-- Paper mode never calls a live endpoint.
-- Live mode requires an explicit configuration flag.
-- Every order has an idempotency key.
-- The kill switch prevents new orders.
+Synthetic data is only a plumbing test. It cannot validate the AMT hypothesis, because it has no auction structure.
 
 ---
 
-## Test Data
+## The Windows LightGBM Caveat
 
-- Keep small, anonymised fixtures under `tests/fixtures/`.
-- Include at least one session with gaps, duplicates, and out-of-order ticks.
-- Never commit real account identifiers or credentials.
-- Multi-instrument fixtures are deferred until multi-instrument support exists.
+Importing pandas or pyarrow before `lightgbm` can make the first `LGBMClassifier.fit` crash with:
+
+```text
+OSError: exception: access violation reading 0x0000000000000000
+```
+
+inside `LGBM_DatasetSetField`.
+
+`engine/models.py` imports LightGBM first and `engine/__init__.py` imports `.models` before anything else, so importing `engine` is always safe. A test or script that imports pandas at the top and lands in `engine.models` later can still trip it; import `engine` first.
+
+If the crash appears in a new environment, check import order before suspecting the data.
 
 ---
 
-## Continuous Integration
+## What Is Not Covered
 
-Planned CI pipeline:
+| Gap | Risk |
+|-----|------|
+| Live-to-offline parity | Live inference does not exist, so there is nothing to compare |
+| Long-run capture | Reconnects and multi-hour sessions are untested |
+| Real tick density | Synthetic ticks are far denser and cleaner than a real feed |
+| Calibration on real data | Only synthetic and small samples have been exercised |
+| Statistical validity | Unit tests assert mechanics, not edge |
+| Multi-instrument | Explicitly unsupported |
+| Demo/live execution | Not implemented |
 
-1. Install Python dependencies.
-2. Run unit and contract tests.
-3. Run replay tests on fixtures.
-4. Run lint and type checks.
-5. Upload coverage (target to be defined).
-6. Fail on missing doc status labels or broken index links.
+Passing tests mean the pipeline is internally consistent. They say nothing about profitability.
+
+---
+
+## Adding Tests
+
+1. Put the test in the file matching the component.
+2. Build inputs through helpers rather than hard-coding blobs.
+3. Assert the failure mode as well as the success path.
+4. For anything touching time, use explicit UTC-aware timestamps.
+5. Do not assert a specific model score; assert structure, monotonicity, and invariants.
+6. Run the full suite, not only the new file.
+
+---
+
+## Documentation Checklist
+
+Since the scaffold validator was removed, check by hand:
+
+- [ ] Every doc has `Status: Current`, `Planning`, or `Historical`.
+- [ ] Every link in `docs/index.md` resolves to a file.
+- [ ] No doc points at `sources/`, `scripts/`, `amt/`, or `test_receiver.py` at the root.
+- [ ] Commands in `AGENTS.md`, `README.md`, and `RUNBOOK.md` match the real CLI.
+- [ ] Version strings are `amt-v3`, `core16-v1`, `snapshot-horizon-v1`, `1m-clock-v1`.
+- [ ] No doc claims live execution, live features, or multi-instrument support.
 
 ---
 
 ## Related Documentation
 
-- [Tick stream contract](../data/01_TICK_STREAM.md)
-- [1-minute candle aggregation](../data/03_CANDLE_AGGREGATION.md)
+- [Components](02_COMPONENTS.md)
+- [Runtime and entry point](11_RUNTIME_AND_ENTRYPOINT.md)
 - [Model validation](09_MODEL_VALIDATION.md)
 - [Limitations and backlog](10_LIMITATIONS_AND_BACKLOG.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

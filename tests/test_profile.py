@@ -1,6 +1,6 @@
 import unittest
 
-from amt.profile import build_profile
+from engine.domain.profile import build_profile
 
 
 def _prices(counts: list[int], bin_size: float) -> list[float]:

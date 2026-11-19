@@ -1,8 +1,8 @@
 # TPO and Value Area Specification
 
-Status: Planning
+Status: Current
 
-> This document specifies how tick density becomes a rolling Time-Price Opportunity (TPO) profile and how the Point of Control (POC), Value Area High (VAH), and Value Area Low (VAL) are computed. The offline implementation is `amt/profile.py`.
+> This document specifies how tick density becomes a rolling Time-Price Opportunity (TPO) profile and how the Point of Control (POC), Value Area High (VAH), and Value Area Low (VAL) are computed. The implementation is `engine/domain/profile.py`.
 
 ---
 
@@ -231,9 +231,10 @@ The value area contains 70 of 81 ticks, or 86.4%, because the pair expansion ove
 
 - [Tick stream contract](../data/01_TICK_STREAM.md)
 - [AMT Feature Specification](../data/05_AMT_FEATURE_SPEC.md)
+- [Model inputs](09_MODEL_INPUTS.md)
 - [Auction Market Theory](../concepts/05_AUCTION_MARKET_THEORY.md)
 - [Data Pipeline](../system/07_DATA_PIPELINE.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

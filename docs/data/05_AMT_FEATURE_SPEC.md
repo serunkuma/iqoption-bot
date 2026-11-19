@@ -2,7 +2,7 @@
 
 Status: Current
 
-> This document defines the exact AMT feature families and formulas. The offline feature engine in `amt/features.py` implements `amt-v2`; live receiver integration is not built yet. Every feature is computable causally from one timestamp per tick.
+> This document defines the exact AMT feature families and formulas. `engine/features.py` implements `amt-v3`: one row per validated snapshot, with a 16-feature `core16-v1` model vector and the remaining columns kept as diagnostics. Every feature is computable causally from one snapshot time.
 
 ---
 
@@ -10,7 +10,7 @@ Status: Current
 
 | Symbol | Meaning |
 |--------|---------|
-| `P_t` | Current tick price at decision time `t` |
+| `P_t` | Price at the snapshot time `t` — the last tick at or before `t` |
 | `k` | Number of completed 1-minute candles since capture start |
 | `POC` | Point of Control from the macro profile |
 | `VAH` | Value Area High |
@@ -192,11 +192,12 @@ Time features use the tick's own local timestamp. They do not convert to a sessi
 
 | Name | Type | Formula / source |
 |------|------|------------------|
-| `tick_id` | int | Row ordinal in the sorted tick stream |
-| `timestamp` | string | Tick receipt time, ISO 8601 with offset |
-| `active_id` | int or null | Instrument key |
+| `snapshot_id` | int | Snapshot ordinal within the build |
+| `timestamp` | string | Snapshot time, ISO 8601 with offset |
+| `active_id` | int | Instrument key |
 | `price` | float | `P_t` |
-| `feature_version` | string | `amt-v2` |
+| `feature_version` | string | `amt-v3` |
+| `core_feature_version` | string | `core16-v1` |
 | `poc` | float or null | POC bin midpoint |
 | `vah` | float or null | Upper edge of the highest included bin |
 | `val` | float or null | Lower edge of the lowest included bin |
@@ -230,10 +231,11 @@ Time features use the tick's own local timestamp. They do not convert to a sessi
 ## Causal Rules
 
 1. A feature snapshot at time `t` may use only ticks with timestamp `<= t`.
-2. The profile and `sigma_7` use completed candles only.
-3. The forming candle contributes only `P_t` and forming-layer activity.
-4. No feature may use any tick after `t`.
-5. Feature computation for training and inference must share the same code path and version.
+2. The sampler truncates the forming bar at `t` before any feature is computed.
+3. The profile and `sigma_7` use completed candles only.
+4. The forming candle contributes only `P_t` and forming-layer activity.
+5. No feature may use any tick after `t`.
+6. Feature computation for training and inference must share the same code path and version.
 
 ---
 
@@ -254,14 +256,22 @@ Missing values are never imputed from future data and never replaced with the cu
 
 ## Feature Versioning
 
-The current feature set is `amt-v2`. A new version is required when:
+Two version strings matter:
+
+| Version | Scope |
+|---------|-------|
+| `amt-v3` | The full snapshot table, including diagnostics |
+| `core16-v1` | The sixteen model inputs |
+
+A new version is required when:
 
 - `macro_candles`, `fast_candles`, or the candle interval changes.
 - Bin size, `sigma_7`, or value-area expansion changes.
 - A feature is added, removed, or redefined.
 - The definition of a layer or ratio changes.
+- The snapshot offset, entry delay, or tolerance changes.
 
-`amt-v1` was the pre-implementation draft with fixed velocity windows and candle-close `sigma_t`. It is superseded.
+`amt-v1` was the pre-implementation draft with fixed velocity windows and candle-close `sigma_t`. `amt-v2` was the previous tick-level table. Both are superseded.
 
 ---
 
@@ -269,27 +279,31 @@ The current feature set is `amt-v2`. A new version is required when:
 
 | Item | Location |
 |------|----------|
-| Window and layer logic | `amt/features.py` |
-| TPO profile | `amt/profile.py` |
-| Candle bucketing | `amt/timeframes.py` |
-| Configuration | `config/default.toml`, `amt/config.py` |
-| Tests | `tests/test_features.py`, `tests/test_profile.py`, `tests/test_timeframes.py` |
+| Feature engine | `engine/features.py` |
+| TPO profile | `engine/domain/profile.py` |
+| Candle bucketing | `engine/domain/timeframes.py` |
+| Snapshot gate | `engine/sampler.py` |
+| Configuration | `config/default.toml`, `engine/config.py` |
+| Tests | `tests/test_features.py`, `tests/test_profile.py`, `tests/test_timeframes.py`, `tests/test_sampler.py` |
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -t .
-.\.venv\Scripts\python.exe -m amt.build --input data\ticks.csv
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
+.\.venv\Scripts\python.exe runner.py build --input data\ticks.csv
 ```
+
+The tick-level diagnostic table (`build_diagnostic_table`) still exists for research. It routes through `compute_features`, so it cannot drift from the snapshot path.
 
 ---
 
 ## Related Documentation
 
+- [Model inputs](09_MODEL_INPUTS.md)
+- [Snapshots and continuity](08_SNAPSHOTS_AND_CONTINUITY.md)
 - [TPO and Value Area](04_TPO_VALUE_AREA.md)
 - [Tick stream contract](01_TICK_STREAM.md)
 - [Labels and expected value](06_LABELS_PAYOUTS_AND_EV.md)
 - [Auction Market Theory](../concepts/05_AUCTION_MARKET_THEORY.md)
-- [ML pipeline](../system/08_ML_PIPELINE.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

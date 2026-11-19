@@ -1,8 +1,8 @@
 # Labels, Payouts, and Expected Value
 
-Status: Planning
+Status: Current
 
-> This document defines the prediction target, binary-option payoff math, and the evaluation gate. It is the contract between the data pipeline and the ML pipeline.
+> This document defines the prediction target, binary-option payoff math, and the evaluation gate. It is the contract between the data pipeline and the ML pipeline. Labels are attached to snapshots, priced at a delayed entry tick, and versioned `snapshot-horizon-v1`.
 
 ---
 
@@ -45,21 +45,24 @@ A model with 54% accuracy is profitable at 90% payout and unprofitable at 70% pa
 
 ## Prediction Target
 
-Predictions are tick-based. A model scores each accepted tick as a potential entry point.
+Predictions are attached to **snapshots**, not to every tick. A snapshot is a validated decision point inside a forming minute, by default `:30`.
 
 | Element | Definition |
 |---------|------------|
-| Decision time | Timestamp of one accepted tick |
+| Decision time | `forming_start + snapshot offset` |
+| Features | Ticks at or before the decision time |
+| Entry time | First tick at or after `decision + 250ms` within 1s tolerance |
 | Entry price | That tick's price |
 | Horizons | 60, 90, 120, 180 seconds (configurable) |
-| Exit | First tick at or after `entry + horizon` within the tolerance window |
+| Exit | First tick at or after `entry + horizon` within the 5s tolerance |
 | Tie | Exit price exactly equals entry price |
 
-Label for one tick and one horizon `h`:
+Label for one snapshot and one horizon `h`:
 
 ```text
-exit_price_h = price of the first tick with timestamp >= t + h
-               and timestamp <= t + h + exit_tolerance
+target_h     = actual_entry_time + h
+exit_price_h = price of the first tick with timestamp >= target_h
+               and timestamp <= target_h + exit_tolerance
 
 label_h = call    if exit_price_h > entry_price
         = put     if exit_price_h < entry_price
@@ -67,15 +70,17 @@ label_h = call    if exit_price_h > entry_price
         = missing if no tick satisfies the exit window
 ```
 
-Defaults: `exit_tolerance = 5 seconds`, `tie_policy = exclude`.
+Defaults: `entry_delay_ms = 250`, `entry_tolerance_seconds = 1.0`, `exit_tolerance_seconds = 5.0`, `tie_policy = exclude`.
+
+The exit is measured from the **actual entry time**, not from the snapshot time. A 60s horizon from a snapshot at `:30` that entered at `:30.31` expires at `:31:30.31`.
 
 Ties are never mapped to Put. A missing exit is never mapped to a directional label. Both stay explicit, and rows that are not `call` or `put` are marked unusable for directional training.
 
-### Why tick-based labels
+### Why snapshot labels
 
-Binary options let the trader enter at an arbitrary moment, including mid-candle. Tick-based labels match that mechanic and allow every horizon to be evaluated from the same entry.
+Binary options let the trader enter at an arbitrary moment, including mid-candle, so labels are priced from an actual tick. But evaluating every tick would create thousands of near-identical rows per minute with overlapping outcomes, dominated by whichever microsecond was sampled.
 
-The cost is overlapping observations: adjacent ticks have nearly identical features and outcomes that overlap in time. This is handled at validation time, not by pretending the rows are independent. See [Model Validation](../system/09_MODEL_VALIDATION.md).
+Fixed snapshot offsets give a small, reproducible set of decision points while keeping entry and exit priced from real ticks. The cost is still overlapping observations — a 180s horizon sampled every 30s overlaps six rows — which is handled at validation time with purge and overlap weights.
 
 ### Candles are context, not decisions
 
@@ -89,7 +94,7 @@ These are documented for future research, not the default:
 
 | Label type | Definition | Trade-off |
 |------------|------------|-----------|
-| Tick fixed-offset (default) | Sign of price change at a fixed second offset | Matches arbitrary entry; overlapping observations |
+| Snapshot fixed-offset (default) | Sign of price change at entry plus a fixed horizon | Matches arbitrary entry; overlapping observations |
 | Candle close | Exit at the close of a later completed candle | Cleaner for 60/120/180; cannot express 90s exactly |
 | Touch / barrier | Whether price touches a barrier before expiry | Closer to some platform mechanics; path-dependent |
 | Triple barrier | Profit target, stop, and time barrier | More realistic risk modelling; more complex |
@@ -112,10 +117,10 @@ EV_per_unit = q_hat * payout - (1 - q_hat)
 Trade only if:
 
 ```text
-q_hat > q_breakeven + margin
+EV_per_unit >= min_ev
 ```
 
-Where `margin` covers calibration error, model drift, and execution uncertainty. The default margin is a configuration value, not a hard-coded constant.
+`min_ev` defaults to `0.03` in `[router]`. It covers calibration error, model drift, and execution uncertainty. It is a configuration value, not a hard-coded constant.
 
 ### No-Trade Output
 
@@ -158,32 +163,31 @@ A model can have good AUC and poor calibration. Calibration is mandatory.
 
 One row per:
 
-- `active_id`
-- Tick timestamp
+- `snapshot_id`
 - Expiry horizon
-- Feature version
-- Label version
 
-The feature table has one row per tick. The label table is long format: one row per tick per horizon. Joining them on `tick_id` gives the training dataset.
+The feature table has one row per snapshot. The label table is long format: one row per snapshot per horizon. Joining them on `snapshot_id` gives the training dataset.
 
 Required columns:
 
 | Column | Meaning |
 |--------|---------|
-| `tick_id` | Row ordinal in the sorted tick stream |
-| `timestamp` | Tick receipt time, ISO 8601 with offset |
+| `snapshot_id` | Snapshot ordinal within the build |
+| `timestamp` | Snapshot time, ISO 8601 with offset |
 | `active_id` | Instrument |
-| `entry_price` | Tick price at entry |
+| `entry_timestamp` | Receipt time of the delayed entry tick |
+| `entry_price` | Price of the delayed entry tick |
 | `horizon_seconds` | 60, 90, 120, or 180 |
 | `exit_timestamp` | Receipt time of the exit tick, or null |
 | `exit_price` | Exit tick price, or null |
 | `exit_delay_seconds` | Delay beyond the exact horizon, or null |
 | `label` | `call`, `put`, `tie`, or `missing` |
 | `usable` | `1` when the row may be used for directional training |
-| `payout` | Payout used for EV |
-| `feature_version` | Feature set version, for example `amt-v2` |
-| `label_version` | Label definition version, for example `tick-horizon-v1` |
-| `quality_flags` | Gaps, stale data, missing profile |
+| `feature_version` | `amt-v3` |
+| `core_feature_version` | `core16-v1` |
+| `label_version` | `snapshot-horizon-v1` |
+
+Payout is not stored per row; it is configured per horizon in `[router.payouts]`. Diagnostics such as `profile_missing` and `gap_in_window` are carried by the feature columns.
 
 ### Exclusion Rules
 
@@ -191,10 +195,8 @@ Exclude rows when:
 
 - `label` is `tie` and `tie_policy = "exclude"`.
 - `label` is `missing`.
-- The profile or volatility is missing and the model requires them.
-- `active_id` metadata is missing for payout or pip size.
-- The row falls outside the configured session.
-- The tick is a duplicate or flagged out of order.
+- The snapshot failed the continuity gate (it is never built).
+- The tick is an exact duplicate (it is dropped in the store).
 
 Exclusions must be counted and reported, not silently dropped.
 
@@ -205,9 +207,9 @@ Exclusions must be counted and reported, not silently dropped.
 1. Features at time `t` may use only data up to `t`.
 2. The label uses data after `t`; it must never enter the feature vector.
 3. Train, validation, and test splits are chronological.
-4. Purge rows whose label window crosses a split boundary; the purge length is the longest horizon plus tolerance.
+4. Purge rows whose label window crosses a split boundary; the purge length is the longest horizon plus tolerance (`models.purge_seconds = 180`).
 5. Do not use future payout or future instrument metadata in historical labels unless the value was known at the time.
-6. Overlapping label windows are expected. They reduce effective sample size and must be handled by purging and by reporting the number of independent windows, not just the row count.
+6. Overlapping label windows are expected. They reduce effective sample size and are handled with purging and overlap weights, not by pretending rows are independent.
 
 ---
 
@@ -228,6 +230,7 @@ If the gate fails, the project returns to feature research or declares the hypot
 
 ## Related Documentation
 
+- [Snapshots and continuity](08_SNAPSHOTS_AND_CONTINUITY.md)
 - [TPO and Value Area](04_TPO_VALUE_AREA.md)
 - [AMT Feature Specification](05_AMT_FEATURE_SPEC.md)
 - [Model Validation](../system/09_MODEL_VALIDATION.md)
@@ -236,4 +239,4 @@ If the gate fails, the project returns to feature research or declares the hypot
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

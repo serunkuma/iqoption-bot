@@ -94,16 +94,18 @@ Exact definitions live in [TPO and Value Area](../data/04_TPO_VALUE_AREA.md) and
 
 ---
 
-## Regime-First Design
+## Regime-First Design (Research)
 
-The recommended architecture splits the problem:
+The leading hypothesis for improving on the shipped model splits the problem:
 
 1. **Stage 1:** Determine whether the market is balanced or imbalanced.
 2. **Stage 2:** Apply a conditional directional model:
    - Balance model: mean reversion toward POC.
    - Imbalance model: continuation with the breakout.
 
-This is preferable to a single model that mixes incompatible market states. A single model can also use AMT features, but it must be validated against the regime-gated baseline.
+This is preferable in principle to a single model that mixes incompatible market states, but it is not implemented. It needs a validated regime rule and enough rows per regime to train and calibrate two models. The shipped pipeline is four independent horizon classifiers that already carry AMT features; a regime-gated version must beat it out of sample before it replaces it.
+
+See [ML pipeline](../system/08_ML_PIPELINE.md) for the current architecture and the preconditions.
 
 ---
 
@@ -145,10 +147,11 @@ See [AMT on OTC](../research/AMT_ON_OTC.md).
 - [TPO and Value Area](../data/04_TPO_VALUE_AREA.md)
 - [AMT Feature Specification](../data/05_AMT_FEATURE_SPEC.md)
 - [Labels, Payouts, and Expected Value](../data/06_LABELS_PAYOUTS_AND_EV.md)
+- [Model Inputs](../data/09_MODEL_INPUTS.md)
 - [Data Pipeline](../system/07_DATA_PIPELINE.md)
 - [ML Pipeline](../system/08_ML_PIPELINE.md)
 - [AMT on OTC](../research/AMT_ON_OTC.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*

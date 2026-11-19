@@ -2,18 +2,19 @@
 
 Status: Current
 
-> **Scope:** This runbook covers the current tick-capture proof of concept. There is no trading procedure yet because the project cannot place trades.
+> **Scope:** This runbook covers capture, build, train, backtest, and diagnose. There is no trading procedure because the project cannot place trades. Execution is paper-only inside the backtest.
 
 ---
 
 ## Core Rules
 
 1. **Documentation is authority.** Read `AGENTS.md` before changing or operating the system.
-2. **Do not trade real money.** The current code has no execution, risk, or kill switch.
+2. **Do not trade real money.** There is no execution adapter, no risk manager, and no kill switch.
 3. **Check the status label.** Only follow docs marked `Status: Current`.
 4. **Use the virtual environment.** Do not run bare `python`.
-5. **Keep this runbook current.** Update it when commands or behaviour change.
-6. **Treat captured data as sensitive.** Do not publish raw account or session data.
+5. **Import `engine` before `pandas`.** See the LightGBM caveat below.
+6. **Keep this runbook current.** Update it when commands or behaviour change.
+7. **Treat captured data as sensitive.** Do not publish raw account or session data.
 
 ---
 
@@ -29,20 +30,31 @@ Status: Current
 ```powershell
 Test-Path .\.venv\Scripts\python.exe
 .\.venv\Scripts\python.exe --version
-.\.venv\Scripts\python.exe -m pip show websockets
+.\.venv\Scripts\python.exe -m pip show websockets lightgbm
 ```
 
-### 2. Start the receiver
+### 2. Start capture
 
 ```powershell
-.\.venv\Scripts\python.exe receiver.py
+.\.venv\Scripts\python.exe runner.py serve
 ```
 
-Expected output:
+Expected log lines include:
 
 ```text
+Persisting accepted ticks to data/raw
 Listening for tick data on ws://localhost:8765
 ```
+
+`serve` captures only. It does not produce candles, features, or signals.
+
+Optional overrides:
+
+```powershell
+.\.venv\Scripts\python.exe runner.py serve --host localhost --port 8766 --raw-dir ''
+```
+
+`--raw-dir ''` disables persistence for a capture-only session.
 
 ### 3. Open IQ Option
 
@@ -58,15 +70,112 @@ Watch for lines containing:
 asset=... active_id=... close=... open=... min=... max=... volume=... at=...
 ```
 
-If prices match the platform, capture is working.
+If prices match the platform, capture is working. Accepted ticks are appended to `data/raw/ticks-YYYY-MM-DD.jsonl`.
 
-### 5. Run tests
+### 5. Diagnose the capture
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest -v test_receiver
+.\.venv\Scripts\python.exe runner.py diagnose --input data\raw\ticks-2026-11-18.jsonl
 ```
 
-### 6. Stop
+Check:
+
+| Output | Suspicious when |
+|--------|-----------------|
+| `rows` | Very small for the session length |
+| `duplicates dropped` | Large relative to rows |
+| `out-of-order rows` | Non-zero and growing |
+| `span seconds` | Shorter than the session |
+| `minutes with ticks` | Noticeably fewer than the span in minutes |
+
+### 6. Build the dataset
+
+```powershell
+.\.venv\Scripts\python.exe runner.py build --input data\raw\ticks-2026-11-18.jsonl
+```
+
+The build summary reports:
+
+| Field | Meaning |
+|-------|---------|
+| `ticks` | Rows in the tick store |
+| `duplicates_dropped` | Exact duplicates removed |
+| `out_of_order` | Rows that arrived out of order |
+| `snapshots` | Snapshots that passed the continuity gate |
+| `feature_rows` | One row per snapshot |
+| `label_rows` | One row per snapshot per horizon |
+| `dataset_rows` | Joined rows |
+| `usable_rows` | Rows with a directional label |
+| `config_hash` | First 16 hex characters of the config digest |
+| `candidate_minutes` | Whole minutes containing at least one tick |
+| `skipped_insufficient_history` | Fewer than seven completed bars |
+| `skipped_gap` | A minute is missing inside the macro window |
+| `skipped_sparse_bar` | A completed bar has too few ticks |
+| `skipped_no_pre_offset_tick` | No tick at or before the snapshot offset |
+| `skipped_no_entry_tick` | No entry tick inside the delay plus tolerance |
+| `snapshots_with_missing_exits` | At least one horizon has no exit tick |
+
+Expected artifacts: `data/ticks.parquet`, `data/features.parquet`, `data/labels.parquet`, `data/dataset.parquet`.
+
+A high `skipped_gap` means the capture has holes. A high `skipped_no_entry_tick` means the feed is sparse or the entry tolerance is too tight.
+
+### 7. Train
+
+```powershell
+.\.venv\Scripts\python.exe runner.py train
+```
+
+Writes `data/models/suite.pkl` plus a dated copy `suite-YYYYMMDDTHHMMSSZ.pkl`.
+
+Read the per-horizon line carefully:
+
+```text
+horizon   60s  rows=... oos=... eval=... brier=... auc=... cal=...
+```
+
+- `eval` is the held-out evaluation slice. If it is very small, the metrics are noise.
+- `cal=none` with a note means the Platt fit was rejected as non-increasing and identity calibration shipped. That is an honest failure, not a bug.
+- `skipped <h>s : too few rows` means that horizon has no model and will always be a no-trade in the backtest.
+
+### 8. Backtest
+
+```powershell
+.\.venv\Scripts\python.exe runner.py backtest
+```
+
+Writes `reports/backtest.json` and `reports/backtest.md`.
+
+Summary keys:
+
+| Key | Meaning |
+|-----|---------|
+| `snapshots` | Snapshots routed to a proposal (the result's `routed` counter) |
+| `skipped_no_model` | Snapshot not in the held-out evaluation slice, or no model for that horizon |
+| `skipped_below_hurdle` | Routed snapshot whose best EV failed the hurdle |
+| `skipped_overlap` | Blocked by the one-open-trade limit |
+| `trades` | Trades opened by the paper broker |
+| `closed` / `open` | Resolved / still open at the end of replay |
+| `wins` / `losses` / `voids` | Resolution counts; a tie resolves to void |
+| `pnl` | Sum of realised PnL at fixed stake |
+| `win_rate` | Wins divided by closed trades |
+
+`skipped_no_model` is normally the largest number. That is correct: only the later 30% of walk-forward out-of-sample rows are replayable.
+
+### 9. Run the tests
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
+```
+
+Expected tail:
+
+```text
+Ran 111 tests
+
+OK
+```
+
+### 10. Stop capture
 
 Press `Ctrl+C` in the receiver terminal. Confirm `Receiver stopped.`
 
@@ -78,7 +187,7 @@ Press `Ctrl+C` in the receiver terminal. Confirm `Receiver stopped.`
 
 **Check:**
 
-1. The receiver is running and listening on port 8765.
+1. The receiver is running and listening on the configured port.
 2. The extension is loaded and enabled.
 3. The IQ Option page was reloaded after loading the extension.
 4. The page is on `*.iqoption.com`.
@@ -103,7 +212,9 @@ Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue
 **Fix:**
 
 - Stop the other receiver process, or
-- Change `PORT` in `receiver.py` and `SERVER_URL` in `chrome-extension/content.js`, then reload the extension.
+- Change `PORT` in `components/receiver.py` and `SERVER_URL` in `chrome-extension/content.js`, then reload the extension.
+
+Receiver host and port are still module constants (with CLI overrides); they are not yet in `config/default.toml`.
 
 ---
 
@@ -131,6 +242,8 @@ The receiver ignores frames that are:
 
 Check the receiver console for warnings such as `Ignoring malformed JSON frame.`
 
+A frame can also be accepted at capture time and rejected later at build time: the tick store rejects naive timestamps, non-numeric prices, non-positive prices, and `active_id` mismatches, and it reports the line number.
+
 ---
 
 ### Issue: `active_id` shows as `unmapped`
@@ -147,6 +260,63 @@ Restart the receiver. The mapping only changes the log label.
 
 ---
 
+### Issue: Build fails with `TickStoreError`
+
+The message includes the offending line. Common causes:
+
+| Cause | Fix |
+|-------|-----|
+| Naive timestamp | Capture with `received_at`; never hand-write timestamps without an offset |
+| Non-positive price | Inspect the raw payload; the record is bad |
+| `active_id` mismatch | Set `instrument.active_id` in the config, or omit it to auto-select |
+
+Never patch a bad row silently. Fix the capture or exclude the file.
+
+---
+
+### Issue: `build` produces very few snapshots
+
+The continuity gate is strict by design. Check `skipped_gap` and `skipped_sparse_bar` first. A capture with holes will not produce snapshots, and the engine will not interpolate.
+
+---
+
+### Issue: `train` skips every horizon
+
+`models.min_train_rows` defaults to 500 usable rows per horizon. A short capture does not clear it. Either capture longer or lower the threshold for a smoke test, and do not interpret the resulting metrics.
+
+---
+
+### Issue: `backtest` reports zero trades
+
+Check, in order:
+
+1. `skipped_no_model` — the suite may have no evaluation rows at all.
+2. `cal` — identity calibration plus a wide probability spread can keep EV below the hurdle.
+3. `router.min_ev` — `0.03` is deliberately conservative. Do **not** lower it until trades appear.
+
+---
+
+### Issue: LightGBM crashes inside `LGBM_DatasetSetField`
+
+Symptom:
+
+```text
+OSError: exception: access violation reading 0x0000000000000000
+```
+
+Cause: `pandas` or `pyarrow` was imported before `lightgbm` on Windows.
+
+Fix:
+
+```python
+import engine  # imports .models first
+import pandas as pd
+```
+
+`runner.py` and the test suite already do this. Ad-hoc scripts must follow the same order.
+
+---
+
 ### Issue: Tests fail
 
 **Check:**
@@ -157,22 +327,23 @@ Restart the receiver. The mapping only changes the log label.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m unittest -v test_receiver
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
 ```
 
 ---
 
 ## Weekly Tasks
 
-- [ ] Run the receiver tests.
+- [ ] Run the full test suite.
+- [ ] Run `diagnose` on the newest capture and look for new duplicates or ordering inversions.
 - [ ] Review the limitation backlog in `docs/system/10_LIMITATIONS_AND_BACKLOG.md`.
 - [ ] Confirm documentation status labels are current.
 - [ ] Check for dependency updates.
-- [ ] Review any captured logs for repeated errors.
+- [ ] Review captured logs for repeated errors.
 
 ### Documentation validation
 
-The scaffold validator was removed with the scaffolding. Use the manual checklist in `docs/system/05_TESTING.md`: status labels, resolving index links, no links to removed `sources/` or `scripts/` folders, and matching commands across `AGENTS.md`, `README.md`, and this runbook.
+The scaffold validator was removed with the scaffolding. Use the manual checklist in `docs/system/05_TESTING.md`: status labels, resolving index links, no links to removed `sources/`, `scripts/`, `amt/`, or root `receiver.py`, and matching commands across `AGENTS.md`, `README.md`, and this runbook.
 
 ---
 
@@ -183,9 +354,9 @@ Not available.
 Before any trading procedure is added:
 
 - The validation gate in `docs/system/09_MODEL_VALIDATION.md` must pass.
-- Paper mode must run successfully.
-- Demo mode must be tested.
-- Risk limits and a kill switch must be implemented and tested.
+- Paper replay must run without errors.
+- A risk manager and kill switch must be implemented and tested.
+- A demo adapter must be implemented and reconciled.
 - Live execution must be explicitly approved.
 
 ---
@@ -197,10 +368,13 @@ Before any trading procedure is added:
 | Create environment | `py -m venv .venv` |
 | Activate environment | `.\.venv\Scripts\Activate.ps1` |
 | Install dependencies | `py -m pip install -r requirements.txt` |
-| Run receiver | `.\.venv\Scripts\python.exe receiver.py` |
-| Run tests | `.\.venv\Scripts\python.exe -m unittest -v test_receiver` |
-| Run AMT tests | `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v` |
-| Build features and labels | `.\.venv\Scripts\python.exe -m amt.build --input data\ticks.csv` |
+| Capture ticks | `.\.venv\Scripts\python.exe runner.py serve` |
+| Capture without persistence | `.\.venv\Scripts\python.exe runner.py serve --raw-dir ''` |
+| Diagnose a capture | `.\.venv\Scripts\python.exe runner.py diagnose --input data\raw\ticks-YYYY-MM-DD.jsonl` |
+| Build store and dataset | `.\.venv\Scripts\python.exe runner.py build --input data\raw\ticks-YYYY-MM-DD.jsonl` |
+| Train models | `.\.venv\Scripts\python.exe runner.py train` |
+| Backtest | `.\.venv\Scripts\python.exe runner.py backtest` |
+| Run tests | `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v` |
 | Check port | `Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue` |
 | Check docs | Manual checklist in `docs/system/05_TESTING.md` |
 
@@ -210,10 +384,12 @@ Before any trading procedure is added:
 
 - [README](README.md)
 - [AGENTS.md](AGENTS.md)
+- [Runtime and entry point](docs/system/11_RUNTIME_AND_ENTRYPOINT.md)
 - [System overview](docs/system/01_OVERVIEW.md)
+- [Model validation](docs/system/09_MODEL_VALIDATION.md)
 - [Limitations and backlog](docs/system/10_LIMITATIONS_AND_BACKLOG.md)
 - [Tick stream contract](docs/data/01_TICK_STREAM.md)
 
 ---
 
-*Last updated: 2026-11-18*
+*Last updated: 2026-11-19*
