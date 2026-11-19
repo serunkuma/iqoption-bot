@@ -2,7 +2,15 @@
 
 Status: Current
 
-> File finder for the project. Every link below resolves to a file that exists.
+> File finder for the project. Every link below resolves to a file that exists, and every doc here carries a status label. Both are enforced by `runner.py docs-check`.
+
+---
+
+## Start Here
+
+- [Orientation](00_ORIENTATION.md) — **Read this first.** The pipeline with real numbers, the 16-vs-53 column split, what is proven vs assumed, and a reading order
+
+**Use when:** You are new to the repository or returning after a break.
 
 ---
 
@@ -104,6 +112,7 @@ If a doc lacks a status label, treat it as incomplete.
 
 | Topic | Doc |
 |-------|-----|
+| New to the project | [00_ORIENTATION.md](00_ORIENTATION.md) |
 | What exists today | [system/01_OVERVIEW.md](system/01_OVERVIEW.md) |
 | How to run each command | [system/11_RUNTIME_AND_ENTRYPOINT.md](system/11_RUNTIME_AND_ENTRYPOINT.md) |
 | Every config key | [system/03_CONFIGURATION.md](system/03_CONFIGURATION.md) |

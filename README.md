@@ -94,7 +94,10 @@ Inputs may be `.csv`, `.jsonl`, or `.parquet`; the default is `data/ticks.csv`. 
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
+.\.venv\Scripts\python.exe runner.py docs-check
 ```
+
+The first command runs the 117 unit tests. The second validates documentation status labels, links, and index coverage.
 
 ### 9. Stop capture
 
@@ -131,12 +134,14 @@ iqoption-bot/
 ├── components/receiver.py  # Tick capture
 ├── engine/                 # Store, sampler, features, models, router, execution
 ├── chrome-extension/       # MV3 capture extension
-├── tests/                  # 111 unit tests
+├── tests/                  # 117 unit tests
+├── tools/                  # Development tooling (docs checker)
 └── docs/                   # Documentation tree
 ```
 
 ## Documentation
 
+- [docs/00_ORIENTATION.md](docs/00_ORIENTATION.md) — **start here**: the pipeline, the feature layers, what is proven
 - [docs/index.md](docs/index.md) — full documentation index
 - [AGENTS.md](AGENTS.md) — source of truth for agents and developers
 - [RUNBOOK.md](RUNBOOK.md) — operating capture, build, train, and backtest

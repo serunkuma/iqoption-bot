@@ -55,6 +55,7 @@ Status: Current
 | Monitoring | Console logs and offline reports | No metrics or alerts |
 | Config | Receiver host/port/buffer live in code | Deployment changes need edits |
 | Packaging | `requirements.txt` only; no installable package | Reproducibility depends on the venv |
+| Documentation freshness | `docs-check` validates labels, links, and index coverage only | Prose can still describe behaviour that changed |
 
 ---
 
@@ -71,6 +72,7 @@ Status: Current
 | P0-5 | Move receiver constants into configuration | `[server]` section; validation errors are clear |
 | P0-6 | Add structured logging | Key-value or JSON logs with `active_id`, frame outcome, counters |
 | P0-7 | Persist snapshots | `snapshots.parquet` written and reloadable |
+| P0-8 | Run `docs-check` automatically | Pre-commit hook or CI step fails on a stale doc |
 
 ### P1 — Make research efficient
 

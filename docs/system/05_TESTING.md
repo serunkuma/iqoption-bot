@@ -17,7 +17,7 @@ Import `engine` before pandas in any ad-hoc script; see the Windows LightGBM cav
 Expected tail:
 
 ```text
-Ran 111 tests in 15.5s
+Ran 117 tests
 
 OK
 ```
@@ -41,6 +41,7 @@ OK
 | `test_backtest.py` | 5 | Only held-out snapshots routed, trades reference evaluated snapshots, one-open-trade limit, no-model no-trade, horizon resolution |
 | `test_reports.py` | 6 | Reliability bins, Brier/AUC/ECE, single-class safety, concurrency, JSON/Markdown writing without `tabulate` |
 | `test_receiver.py` | 5 | Identity formatting, acceptance and buffering, rejection paths, asset-map loading |
+| `test_docs.py` | 6 | Missing status, broken link, ignored external/anchor/mailto links, orphan doc, and a clean sweep of this repository |
 
 ---
 
@@ -105,14 +106,27 @@ Passing tests mean the pipeline is internally consistent. They say nothing about
 
 ## Documentation Checklist
 
-Since the scaffold validator was removed, check by hand:
+Three checks are automated by `tools/check_docs.py`, reachable as `runner.py docs-check`:
 
-- [ ] Every doc has `Status: Current`, `Planning`, or `Historical`.
-- [ ] Every link in `docs/index.md` resolves to a file.
-- [ ] No doc points at `sources/`, `scripts/`, `amt/`, or `test_receiver.py` at the root.
+```powershell
+.\.venv\Scripts\python.exe runner.py docs-check
+```
+
+| Check | Fails when |
+|-------|------------|
+| Status label | A doc under `docs/` has no `Status:` line |
+| Link resolution | A relative markdown link targets a missing file |
+| Index coverage | A doc under `docs/` is not linked from `docs/index.md` |
+
+The remainder is still human work:
+
+- [ ] No doc points at removed `sources/`, `scripts/`, `amt/`, or root `receiver.py`.
 - [ ] Commands in `AGENTS.md`, `README.md`, and `RUNBOOK.md` match the real CLI.
 - [ ] Version strings are `amt-v3`, `core16-v1`, `snapshot-horizon-v1`, `1m-clock-v1`.
 - [ ] No doc claims live execution, live features, or multi-instrument support.
+- [ ] Counts quoted in docs (test totals, column counts) match a fresh run.
+
+The checker validates structure, not truth. A doc can pass every check and still describe behaviour that no longer exists.
 
 ---
 

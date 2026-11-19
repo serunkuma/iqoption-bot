@@ -25,9 +25,11 @@ iqoption-bot/
 ├── README.md                       # Project entry point
 ├── AGENTS.md                       # THIS FILE — agent guide and source of truth
 ├── RUNBOOK.md                      # Operating procedures
-├── runner.py                       # Entry point: serve/build/train/backtest/diagnose
+├── runner.py                       # Entry point: serve/build/train/backtest/diagnose/docs-check
 ├── requirements.txt                # Python dependencies
 ├── asset_names.json                # active_id → display-name map
+├── tools/
+│   └── check_docs.py               # Documentation status/link/index checker
 ├── config/
 │   └── default.toml                # Active configuration for the whole engine
 ├── components/
@@ -54,8 +56,8 @@ iqoption-bot/
 │   ├── manifest.json               # MV3 manifest
 │   ├── inject.js                   # Page-world WebSocket interception
 │   └── content.js                  # Local forwarder with reconnect and queue
-├── tests/                          # 111 unit tests
-├── docs/                           # Documentation tree (see docs/index.md)
+├── tests/                          # 117 unit tests
+├── docs/                           # Documentation tree (start at docs/00_ORIENTATION.md)
 └── .gitignore
 ```
 
@@ -118,6 +120,14 @@ Inputs may be `.csv`, `.jsonl`, or `.parquet`. Default input is `data/ticks.csv`
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
 ```
+
+### Check the documentation
+
+```powershell
+.\.venv\Scripts\python.exe runner.py docs-check
+```
+
+Verifies that every doc under `docs/` has a status label, every relative link resolves, and every doc is reachable from `docs/index.md`. Exit code `0` means clean; `1` lists the offending files. Run it after any documentation change. It needs no configuration, so it works even when the TOML file is broken.
 
 ### Stop the receiver
 
@@ -324,12 +334,13 @@ See [`docs/system/10_LIMITATIONS_AND_BACKLOG.md`](docs/system/10_LIMITATIONS_AND
 
 | Audience | Primary Docs | Purpose |
 |----------|--------------|---------|
+| Newcomers and returning developers | `docs/00_ORIENTATION.md` | Pipeline with real numbers, the 16/31 feature split, reading order |
 | AI agents and developers | `AGENTS.md` | Source of truth, architecture, commands, decisions |
 | Operators | `README.md`, `RUNBOOK.md` | Setup, running, troubleshooting |
 | System designers | `docs/system/` | Current architecture and contracts |
 | Data and ML researchers | `docs/data/`, `docs/research/` | Contracts, formulas, validation, OTC caveats |
 | Project planning | `docs/planning.md`, `docs/planning/` | Phases, milestones, acceptance criteria |
-| Everyone | `docs/index.md` | File finder |
+| Everyone | `docs/index.md` | File finder; enforced by `runner.py docs-check` |
 
 ---
 
@@ -356,6 +367,7 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 - Storing credentials, SSIDs, or account data in the repository.
 - Describing planned components as implemented.
 - Importing pandas before `engine` on Windows.
+- Adding or moving a doc without running `runner.py docs-check`.
 
 ---
 
@@ -367,9 +379,9 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 4. **Record decisions** — add a row to the decision log and a change-log entry.
 5. **Use copy-paste-ready PowerShell commands** with the virtual environment path.
 6. **Run tests after changes** — `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v`.
-7. **Keep docs organised** — concepts for why, data for what, system for how, research for history.
+7. **Keep docs organised** — concepts for why, data for what, system for how, research for history; `docs/00_ORIENTATION.md` is the entry point.
 8. **Use status labels** — `Status: Current`, `Status: Planning`, or `Status: Historical`.
-9. **Do not link to non-existent docs** — every link in `docs/index.md` must resolve.
+9. **Run the documentation checker** — `.\.venv\Scripts\python.exe runner.py docs-check` must exit `0` after any doc change.
 10. **No lookahead** — feature and label code must be causal by construction.
 11. **No secrets in the repo** — `.env` and credentials stay local.
 12. **No live execution without the gate** — see `docs/system/09_MODEL_VALIDATION.md`.
@@ -397,7 +409,9 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 | 2026-11-19 | Added the calibrated model suite, held-out evaluation table, router, and paper backtest | Implementation agent |
 | 2026-11-19 | Added system docs 11–15, data docs 07–09, and rewrote the affected docs | Documentation agent |
 | 2026-11-19 | Rewrote README, RUNBOOK, and the docs index for the `engine/` layout and `runner.py` commands | Documentation agent |
+| 2026-11-19 | Added `docs/00_ORIENTATION.md` and moved the docs checker into `tools/check_docs.py` with `runner.py docs-check` | Documentation agent |
 | 2026-11-19 | Test suite expanded to 111 unit tests | Implementation agent |
+| 2026-11-19 | Test suite expanded to 117 with `tests/test_docs.py` | Implementation agent |
 
 ---
 

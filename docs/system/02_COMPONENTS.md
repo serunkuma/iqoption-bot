@@ -75,6 +75,19 @@ browser frame
 | Backtest | `tests/test_backtest.py` |
 | Reports | `tests/test_reports.py` |
 | Receiver | `tests/test_receiver.py` |
+| Documentation checker | `tests/test_docs.py` |
+
+---
+
+## Development Tooling
+
+Not part of the runtime pipeline; used to keep the repository honest.
+
+| Tool | Location | Responsibility |
+|------|----------|----------------|
+| Documentation checker | `tools/check_docs.py` | Verify status labels, relative links, and index coverage |
+
+Invoked as `runner.py docs-check`. It reads markdown only and imports nothing from `engine`, so it is safe in a bare environment.
 
 ---
 

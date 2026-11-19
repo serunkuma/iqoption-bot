@@ -17,6 +17,7 @@ Every command loads `config/default.toml` (or `--config`), validates it, and fai
 | `train` | Train the four calibrated horizon models | `data/models/suite.pkl` and a dated copy |
 | `backtest` | Replay the held-out evaluation slice through router and paper broker | `reports/backtest.{json,md}` |
 | `diagnose` | Print a data-quality report for a capture or store | nothing |
+| `docs-check` | Validate documentation status labels, links, and index coverage | nothing |
 
 Global flags:
 
@@ -130,6 +131,38 @@ When the suite has no evaluation rows, the command warns, writes a report with a
 | `--input` | `data/ticks.csv` | `.csv`, `.jsonl`, or `.parquet` |
 
 Prints row count, duplicates dropped, out-of-order rows, first and last tick, span in seconds, and the number of whole minutes that contain at least one tick. This is the first check before a build: minutes with ticks is the ceiling on candidate snapshots.
+
+---
+
+## `docs-check`
+
+```powershell
+.\.venv\Scripts\python.exe runner.py docs-check
+```
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--docs-root` | `.` | Repository root to check |
+
+Runs the same code as `tools/check_docs.py` and enforces three rules:
+
+1. Every markdown file under `docs/` declares `Status: Current`, `Planning`, or `Historical`.
+2. Every relative markdown link resolves to a file that exists.
+3. Every markdown file under `docs/` is linked from `docs/index.md`.
+
+Output:
+
+```text
+documentation check
+  files checked                : 42
+  missing status               : 0
+  broken link                  : 0
+  orphan doc                   : 0
+```
+
+Exit code `0` is clean; `1` lists every offending path and detail. This command is config-free: it does not load the TOML file, so it still works when the configuration is broken. It only reads files and imports the standard library, so it cannot trip the LightGBM import ordering.
+
+The checker validates structure, not truth. Prose that no longer matches the code still passes.
 
 ---
 

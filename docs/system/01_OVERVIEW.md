@@ -81,7 +81,7 @@ reports/backtest.{json,md}
 - The 16 core features are computed from one snapshot with no lookahead.
 - Training produces one calibrated model per horizon, or records why a horizon was skipped.
 - The backtest replays only held-out probabilities, enforces the open-trade limit, and writes JSON and Markdown reports.
-- 111 unit tests pass across config, store, timeframes, profile, sampler, features, labels, models, router, execution, reports, backtest, and receiver.
+- 117 unit tests pass across config, store, timeframes, profile, sampler, features, labels, models, router, execution, reports, backtest, receiver, and the documentation checker.
 
 ## Not Verified
 
@@ -135,6 +135,7 @@ reports/backtest.{json,md}
 | `engine/build.py` | Pipeline assembly and artifact writing |
 | `config/default.toml` | Active configuration |
 | `chrome-extension/` | Browser capture extension |
+| `tools/check_docs.py` | Documentation status, link, and index checker |
 | `tests/` | Unit tests for every component |
 
 ---

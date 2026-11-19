@@ -170,7 +170,7 @@ Summary keys:
 Expected tail:
 
 ```text
-Ran 111 tests
+Ran 117 tests
 
 OK
 ```
@@ -317,6 +317,20 @@ import pandas as pd
 
 ---
 
+### Issue: `docs-check` reports a broken link or orphan doc
+
+**Read the output:** it names the source file and the offending target.
+
+| Message | Fix |
+|---------|-----|
+| `broken link: <path>` | The target file was renamed, moved, or deleted — update the link, or restore the file |
+| `orphan doc: <path>` | Add a link to the doc from `docs/index.md` |
+| `missing status: <path>` | Add a `Status: Current`, `Planning`, or `Historical` line near the top |
+
+Run it again until the counts are zero. Exit code `1` is a failure, not a warning.
+
+---
+
 ### Issue: Tests fail
 
 **Check:**
@@ -335,15 +349,31 @@ import pandas as pd
 ## Weekly Tasks
 
 - [ ] Run the full test suite.
+- [ ] Run `runner.py docs-check` and confirm exit code 0.
 - [ ] Run `diagnose` on the newest capture and look for new duplicates or ordering inversions.
 - [ ] Review the limitation backlog in `docs/system/10_LIMITATIONS_AND_BACKLOG.md`.
-- [ ] Confirm documentation status labels are current.
 - [ ] Check for dependency updates.
 - [ ] Review captured logs for repeated errors.
 
 ### Documentation validation
 
-The scaffold validator was removed with the scaffolding. Use the manual checklist in `docs/system/05_TESTING.md`: status labels, resolving index links, no links to removed `sources/`, `scripts/`, `amt/`, or root `receiver.py`, and matching commands across `AGENTS.md`, `README.md`, and this runbook.
+The checker is part of the repository:
+
+```powershell
+.\.venv\Scripts\python.exe runner.py docs-check
+```
+
+It verifies three things:
+
+| Check | Fails when |
+|-------|------------|
+| Status label | A doc under `docs/` has no `Status: Current`, `Planning`, or `Historical` line |
+| Link resolution | A relative markdown link points at a file that does not exist |
+| Index coverage | A doc under `docs/` is not linked from `docs/index.md` |
+
+Exit code `1` lists every offending file. Run it after moving, adding, or deleting docs.
+
+What it cannot check: whether the prose still matches the code, and whether commands in `AGENTS.md`, `README.md`, and this runbook agree. Check those by reading the three files together after a command change.
 
 ---
 
@@ -376,7 +406,7 @@ Before any trading procedure is added:
 | Backtest | `.\.venv\Scripts\python.exe runner.py backtest` |
 | Run tests | `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v` |
 | Check port | `Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue` |
-| Check docs | Manual checklist in `docs/system/05_TESTING.md` |
+| Check docs | `.\.venv\Scripts\python.exe runner.py docs-check` |
 
 ---
 

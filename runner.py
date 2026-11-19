@@ -10,6 +10,7 @@ build      turn a tick capture into the Parquet store and the labelled dataset
 train      train the four calibrated horizon models on a dataset
 backtest   replay a dataset through the router and the paper broker
 diagnose   print a data-quality report for a capture or store
+docs-check validate documentation status labels, links, and index coverage
 """
 
 from __future__ import annotations
@@ -215,6 +216,18 @@ def cmd_diagnose(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_docs_check(args: argparse.Namespace, config: Config | None) -> int:
+    """Validate the documentation tree. Needs no configuration."""
+
+    from tools.check_docs import format_report, check_docs
+
+    report = check_docs(args.docs_root)
+    print("documentation check")
+    for line in format_report(report):
+        print(f"  {line}")
+    return 0 if report.ok else 1
+
+
 # -- argument parsing ------------------------------------------------------
 
 
@@ -251,6 +264,12 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose = sub.add_parser("diagnose", help="print a data-quality report")
     diagnose.add_argument("--input", default=None)
 
+    docs = sub.add_parser(
+        "docs-check",
+        help="validate documentation status labels, links, and index coverage",
+    )
+    docs.add_argument("--docs-root", default=".", help="repository root to check")
+
     return parser
 
 
@@ -260,7 +279,11 @@ COMMANDS = {
     "train": cmd_train,
     "backtest": cmd_backtest,
     "diagnose": cmd_diagnose,
+    "docs-check": cmd_docs_check,
 }
+
+#: Commands that do not read the TOML configuration.
+CONFIG_FREE_COMMANDS = {"docs-check"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -271,6 +294,9 @@ def main(argv: list[str] | None = None) -> int:
         level=getattr(logging, args.log_level),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+    if args.command in CONFIG_FREE_COMMANDS:
+        return COMMANDS[args.command](args, None)
 
     try:
         config = load_config(args.config)
