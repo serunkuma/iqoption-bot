@@ -76,6 +76,7 @@ browser frame
 | Reports | `tests/test_reports.py` |
 | Receiver | `tests/test_receiver.py` |
 | Documentation checker | `tests/test_docs.py` |
+| Hook installer | `tests/test_hooks.py` |
 
 ---
 
@@ -86,8 +87,10 @@ Not part of the runtime pipeline; used to keep the repository honest.
 | Tool | Location | Responsibility |
 |------|----------|----------------|
 | Documentation checker | `tools/check_docs.py` | Verify status labels, relative links, and index coverage |
+| Hook installer | `tools/install_hooks.py` | Point `core.hooksPath` at the versioned `.githooks/` directory |
+| Pre-commit hook | `.githooks/pre-commit` | Run the documentation checker before each commit |
 
-Invoked as `runner.py docs-check`. It reads markdown only and imports nothing from `engine`, so it is safe in a bare environment.
+Invoked as `runner.py docs-check`. It reads markdown only and imports nothing from `engine`, so it is safe in a bare environment. The hook calls `tools/check_docs.py` directly for the same reason.
 
 ---
 
@@ -115,4 +118,4 @@ These are not implemented and must not be described as working.
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

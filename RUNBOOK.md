@@ -25,12 +25,14 @@ Status: Current
 - [ ] Open PowerShell in the repository root.
 - [ ] Confirm the virtual environment exists.
 - [ ] Confirm dependencies are installed.
+- [ ] Confirm the git hooks are installed.
 - [ ] Confirm the extension is loaded in Chrome.
 
 ```powershell
 Test-Path .\.venv\Scripts\python.exe
 .\.venv\Scripts\python.exe --version
 .\.venv\Scripts\python.exe -m pip show websockets lightgbm
+.\.venv\Scripts\python.exe tools\install_hooks.py --status
 ```
 
 ### 2. Start capture
@@ -170,7 +172,7 @@ Summary keys:
 Expected tail:
 
 ```text
-Ran 117 tests
+Ran 121 tests
 
 OK
 ```
@@ -331,6 +333,30 @@ Run it again until the counts are zero. Exit code `1` is a failure, not a warnin
 
 ---
 
+### Issue: The pre-commit hook did not run
+
+**Check:**
+
+```powershell
+.\.venv\Scripts\python.exe tools\install_hooks.py --status
+```
+
+If it prints `unset`, install it:
+
+```powershell
+.\.venv\Scripts\python.exe tools\install_hooks.py
+```
+
+Other causes:
+
+| Cause | Fix |
+|-------|-----|
+| `git commit --no-verify` was used | Expected; the hook is deliberately bypassable |
+| Hooks configured elsewhere (`core.hooksPath` in global config) | The installer sets the repository-local value, which takes precedence |
+| Git GUI or IDE bypasses hooks | Commit from the terminal once to confirm |
+
+---
+
 ### Issue: Tests fail
 
 **Check:**
@@ -371,7 +397,16 @@ It verifies three things:
 | Link resolution | A relative markdown link points at a file that does not exist |
 | Index coverage | A doc under `docs/` is not linked from `docs/index.md` |
 
-Exit code `1` lists every offending file. Run it after moving, adding, or deleting docs.
+Exit code `1` lists every offending file. Run it after moving, adding, or deleting docs. The same check runs automatically before every commit once the hooks are installed:
+
+```powershell
+.\.venv\Scripts\python.exe tools\install_hooks.py
+.\.venv\Scripts\python.exe tools\install_hooks.py --status
+```
+
+The hook calls `tools/check_docs.py` directly, so it needs only the standard library and still works when LightGBM is broken. It is bypassable per commit with `git commit --no-verify`; use that only for an emergency and fix the docs immediately after.
+
+Set `IQBOT_PRECOMMIT_TESTS=1` in the environment to make the hook run the full unit suite as well.
 
 What it cannot check: whether the prose still matches the code, and whether commands in `AGENTS.md`, `README.md`, and this runbook agree. Check those by reading the three files together after a command change.
 
@@ -407,6 +442,8 @@ Before any trading procedure is added:
 | Run tests | `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v` |
 | Check port | `Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue` |
 | Check docs | `.\.venv\Scripts\python.exe runner.py docs-check` |
+| Install git hooks | `.\.venv\Scripts\python.exe tools\install_hooks.py` |
+| Check git hooks | `.\.venv\Scripts\python.exe tools\install_hooks.py --status` |
 
 ---
 

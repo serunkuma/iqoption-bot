@@ -17,7 +17,7 @@ Import `engine` before pandas in any ad-hoc script; see the Windows LightGBM cav
 Expected tail:
 
 ```text
-Ran 117 tests
+Ran 121 tests
 
 OK
 ```
@@ -42,6 +42,7 @@ OK
 | `test_reports.py` | 6 | Reliability bins, Brier/AUC/ECE, single-class safety, concurrency, JSON/Markdown writing without `tabulate` |
 | `test_receiver.py` | 5 | Identity formatting, acceptance and buffering, rejection paths, asset-map loading |
 | `test_docs.py` | 6 | Missing status, broken link, ignored external/anchor/mailto links, orphan doc, and a clean sweep of this repository |
+| `test_hooks.py` | 4 | Hook script contents, unset and installed `core.hooksPath`, missing hooks directory |
 
 ---
 
@@ -128,6 +129,27 @@ The remainder is still human work:
 
 The checker validates structure, not truth. A doc can pass every check and still describe behaviour that no longer exists.
 
+### Pre-commit hook
+
+The checker is wired into git through a versioned hook, so a stale doc cannot be committed by accident:
+
+```powershell
+.\.venv\Scripts\python.exe tools\install_hooks.py
+.\.venv\Scripts\python.exe tools\install_hooks.py --status
+```
+
+| Piece | Location | Purpose |
+|-------|----------|---------|
+| Hook | `.githooks/pre-commit` | Runs `tools/check_docs.py` before every commit |
+| Installer | `tools/install_hooks.py` | Points the repository-local `core.hooksPath` at `.githooks/` |
+| Tests | `tests/test_hooks.py` | Hook contents and installer behaviour |
+
+The hook calls the checker directly rather than `runner.py`, so it needs only the standard library and still works when LightGBM or the rest of the virtual environment is broken. It never modifies files. A failed check exits `1` and prints the offending paths; `git commit --no-verify` bypasses it once, which is meant for emergencies only.
+
+Setting `IQBOT_PRECOMMIT_TESTS=1` makes the hook run the full unit suite after the documentation check. That is off by default because the suite takes several seconds and is better run deliberately.
+
+The hook is not a CI replacement. It only runs on machines where `tools/install_hooks.py` has been executed, and it can be bypassed.
+
 ---
 
 ## Related Documentation
@@ -139,4 +161,4 @@ The checker validates structure, not truth. A doc can pass every check and still
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

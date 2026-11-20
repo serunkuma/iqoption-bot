@@ -162,6 +162,14 @@ documentation check
 
 Exit code `0` is clean; `1` lists every offending path and detail. This command is config-free: it does not load the TOML file, so it still works when the configuration is broken. It only reads files and imports the standard library, so it cannot trip the LightGBM import ordering.
 
+The checker also runs before every commit through the versioned hook:
+
+```powershell
+.\.venv\Scripts\python.exe tools\install_hooks.py
+```
+
+The hook lives in `.githooks/pre-commit` and calls `tools/check_docs.py` directly, so it does not depend on the virtual environment being healthy. See [Testing](../system/05_TESTING.md) for the bypass and optional test-suite behaviour.
+
 The checker validates structure, not truth. Prose that no longer matches the code still passes.
 
 ---
@@ -197,4 +205,4 @@ LightGBM's Windows DLL must load before pandas/pyarrow. If pandas is imported fi
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

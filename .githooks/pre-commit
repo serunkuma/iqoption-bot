@@ -1,0 +1,58 @@
+#!/bin/sh
+# Pre-commit hook: documentation integrity.
+#
+# Installed by:
+#   python tools/install_hooks.py
+#
+# Bypass once with:
+#   git commit --no-verify
+#
+# Runs tools/check_docs.py directly rather than runner.py docs-check, so the
+# hook needs only the standard library and still works when LightGBM or the
+# rest of the venv is broken.
+#
+# Set IQBOT_PRECOMMIT_TESTS=1 to also run the unit test suite.
+
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+find_python() {
+    if [ -x ".venv/Scripts/python.exe" ]; then
+        echo ".venv/Scripts/python.exe"
+    elif [ -x ".venv/bin/python" ]; then
+        echo ".venv/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then
+        echo "python3"
+    elif command -v python >/dev/null 2>&1; then
+        echo "python"
+    else
+        return 1
+    fi
+}
+
+if ! python_bin=$(find_python); then
+    echo "pre-commit: no Python interpreter found; skipping docs-check" >&2
+    exit 0
+fi
+
+echo "pre-commit: documentation check"
+if ! "$python_bin" tools/check_docs.py; then
+    echo "" >&2
+    echo "pre-commit: documentation check failed." >&2
+    echo "Fix the issues above, or bypass once with: git commit --no-verify" >&2
+    exit 1
+fi
+
+if [ "${IQBOT_PRECOMMIT_TESTS:-0}" = "1" ]; then
+    echo "pre-commit: unit tests"
+    if ! "$python_bin" -m unittest discover -s tests -t . ; then
+        echo "" >&2
+        echo "pre-commit: unit tests failed." >&2
+        echo "Fix the failures above, or bypass once with: git commit --no-verify" >&2
+        exit 1
+    fi
+fi
+
+exit 0

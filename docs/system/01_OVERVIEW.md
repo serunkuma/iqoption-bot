@@ -136,6 +136,8 @@ reports/backtest.{json,md}
 | `config/default.toml` | Active configuration |
 | `chrome-extension/` | Browser capture extension |
 | `tools/check_docs.py` | Documentation status, link, and index checker |
+| `tools/install_hooks.py` | Installs the versioned git hooks |
+| `.githooks/` | Pre-commit hook that runs the documentation checker |
 | `tests/` | Unit tests for every component |
 
 ---
@@ -151,4 +153,4 @@ reports/backtest.{json,md}
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

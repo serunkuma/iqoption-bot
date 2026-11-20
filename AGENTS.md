@@ -28,8 +28,12 @@ iqoption-bot/
 ├── runner.py                       # Entry point: serve/build/train/backtest/diagnose/docs-check
 ├── requirements.txt                # Python dependencies
 ├── asset_names.json                # active_id → display-name map
+├── .githooks/
+│   └── pre-commit                  # Runs the documentation checker before each commit
+├── .gitattributes                  # Forces LF endings for the shell hooks
 ├── tools/
-│   └── check_docs.py               # Documentation status/link/index checker
+│   ├── check_docs.py               # Documentation status/link/index checker
+│   └── install_hooks.py            # Points core.hooksPath at .githooks/
 ├── config/
 │   └── default.toml                # Active configuration for the whole engine
 ├── components/
@@ -56,7 +60,7 @@ iqoption-bot/
 │   ├── manifest.json               # MV3 manifest
 │   ├── inject.js                   # Page-world WebSocket interception
 │   └── content.js                  # Local forwarder with reconnect and queue
-├── tests/                          # 117 unit tests
+├── tests/                          # 121 unit tests
 ├── docs/                           # Documentation tree (start at docs/00_ORIENTATION.md)
 └── .gitignore
 ```
@@ -81,6 +85,14 @@ py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 py -m pip install -r requirements.txt
 ```
+
+### Install the git hooks (once per clone)
+
+```powershell
+.\.venv\Scripts\python.exe tools\install_hooks.py
+```
+
+Points `core.hooksPath` at `.githooks/` so the `pre-commit` hook runs the documentation checker on every commit. Check it with `--status`; remove it with `git config --local --unset core.hooksPath`.
 
 ### Capture ticks
 
@@ -311,6 +323,8 @@ IQ Option Traderoom
 | 2026-11-19 | Persist ticks as daily JSONL, analysis as Parquet | Append-only capture; columnar analysis |
 | 2026-11-19 | Import LightGBM before pandas | Prevents a Windows DLL access violation in `LGBM_DatasetSetField` |
 | 2026-11-19 | Keep the two-stage regime design as research only | No validated regime rule and not enough rows per regime |
+| 2026-11-20 | Version the pre-commit hook in `.githooks/` and install it by setting `core.hooksPath` | Hooks stay reviewable with the code; no copy step into `.git/hooks` |
+| 2026-11-20 | Have the hook call `tools/check_docs.py` directly | Needs only the standard library, so it still runs when LightGBM or the venv is broken |
 
 ### Known Limitations
 
@@ -381,7 +395,7 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 6. **Run tests after changes** — `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v`.
 7. **Keep docs organised** — concepts for why, data for what, system for how, research for history; `docs/00_ORIENTATION.md` is the entry point.
 8. **Use status labels** — `Status: Current`, `Status: Planning`, or `Status: Historical`.
-9. **Run the documentation checker** — `.\.venv\Scripts\python.exe runner.py docs-check` must exit `0` after any doc change.
+9. **Run the documentation checker** — `.\.venv\Scripts\python.exe runner.py docs-check` must exit `0` after any doc change. The `pre-commit` hook runs it automatically once `tools/install_hooks.py` has been run.
 10. **No lookahead** — feature and label code must be causal by construction.
 11. **No secrets in the repo** — `.env` and credentials stay local.
 12. **No live execution without the gate** — see `docs/system/09_MODEL_VALIDATION.md`.
@@ -412,9 +426,10 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 | 2026-11-19 | Added `docs/00_ORIENTATION.md` and moved the docs checker into `tools/check_docs.py` with `runner.py docs-check` | Documentation agent |
 | 2026-11-19 | Test suite expanded to 111 unit tests | Implementation agent |
 | 2026-11-19 | Test suite expanded to 117 with `tests/test_docs.py` | Implementation agent |
+| 2026-11-20 | Added the versioned `.githooks/pre-commit` documentation check and `tools/install_hooks.py`; test suite is 121 | Implementation agent |
 
 ---
 
 ## 10. Last Updated
 
-**2026-11-19 by Documentation and Implementation agents**
+**2026-11-20 by Documentation and Implementation agents**

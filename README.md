@@ -44,6 +44,12 @@ py -m venv .venv
 py -m pip install -r requirements.txt
 ```
 
+Install the versioned git hooks once per clone so the documentation checker runs before every commit:
+
+```powershell
+.\.venv\Scripts\python.exe tools\install_hooks.py
+```
+
 ### 2. Start capture
 
 ```powershell
@@ -97,7 +103,7 @@ Inputs may be `.csv`, `.jsonl`, or `.parquet`; the default is `data/ticks.csv`. 
 .\.venv\Scripts\python.exe runner.py docs-check
 ```
 
-The first command runs the 117 unit tests. The second validates documentation status labels, links, and index coverage.
+The first command runs the 121 unit tests. The second validates documentation status labels, links, and index coverage. Once the hooks are installed, the commit-time check runs automatically.
 
 ### 9. Stop capture
 
@@ -134,8 +140,9 @@ iqoption-bot/
 ├── components/receiver.py  # Tick capture
 ├── engine/                 # Store, sampler, features, models, router, execution
 ├── chrome-extension/       # MV3 capture extension
-├── tests/                  # 117 unit tests
-├── tools/                  # Development tooling (docs checker)
+├── tests/                  # 121 unit tests
+├── tools/                  # Docs checker and hook installer
+├── .githooks/              # Versioned pre-commit hook
 └── docs/                   # Documentation tree
 ```
 

@@ -1,0 +1,2 @@
+# Shell hooks must keep LF endings; Git for Windows cannot run a CRLF shebang.
+.githooks/* text eol=lf
