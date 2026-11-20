@@ -4,6 +4,8 @@ Status: Current
 
 > The router converts calibrated horizon probabilities into at most one actionable proposal, or a no-trade decision with a reason code. It never clamps a probability to force a trade.
 
+> **Current versus target:** This router is deterministic, not an ML model. A learned selector for direction/horizon/no-trade is a future design to evaluate against this router; deterministic payout, risk, and execution constraints are intended to remain hard gates. See [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md).
+
 ---
 
 ## Contract
@@ -104,6 +106,7 @@ For a `put`, the stored probability is `1 - q`, so it always describes the chose
 
 ## What the Router Does Not Do
 
+- It does not learn from outcomes or rank candidates with a trained selector.
 - It does not size the stake. Sizing is fixed by `execution.stake`.
 - It does not check whether a trade is already open. `PaperBroker.can_open` owns that.
 - It does not read prices, features, or the tick store.
@@ -141,7 +144,8 @@ If no other horizon clears the hurdle, the proposal is `selected` at 180s. If th
 - [Execution and resolution](14_EXECUTION_AND_RESOLUTION.md)
 - [Labels, payouts, and EV](../data/06_LABELS_PAYOUTS_AND_EV.md)
 - [Configuration](03_CONFIGURATION.md)
+- [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md)
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

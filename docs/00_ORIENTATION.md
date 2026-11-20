@@ -18,6 +18,12 @@ Each arrow is a module with a documented contract and its own tests. `runner.py`
 
 **What it is not:** a trading bot. There is no live feature computation, no live signal loop, no order placement, no risk manager, and no multi-instrument support. Execution is a paper broker inside the backtest. No result so far is distinguishable from noise.
 
+### Intended direction (not implemented)
+
+The goal is to grow this research pipeline into an IQ Option bot whose signal decisions are ML-based, whose trained artifacts are saved using a `.joblib` convention and validated when loaded for inference, and whose eventual market operation progresses through evidence gates. Today, four offline classifiers estimate per-horizon outcomes, but the live feature/inference loop is absent, the final EV router is deterministic, and the saved suite is `suite.pkl` using standard `pickle`.
+
+Features are market-description inputs to models, not trade signals by themselves. A future learned selector may choose direction, horizon, or abstention, while deterministic payout, risk, and execution gates remain hard constraints. See [ML Runtime and Signal Selection](planning/ml-runtime-and-signal-selection.md) for the target design and unresolved implementation choices. Pocket Auto v3 is a reference for selected architecture patterns, not the implementation target.
+
 ---
 
 ## 2. The Pipeline, With One Real Run
@@ -203,6 +209,7 @@ See [Model validation](system/09_MODEL_VALIDATION.md) for the go/no-go gate and 
 5. [Model suite](system/12_MODEL_SUITE.md) -> [Signal router](system/13_SIGNAL_ROUTER.md) -> [Execution and resolution](system/14_EXECUTION_AND_RESOLUTION.md)
 6. [Model validation](system/09_MODEL_VALIDATION.md) -> [Limitations and backlog](system/10_LIMITATIONS_AND_BACKLOG.md)
 7. [Roadmap](planning.md) — what comes next
+8. [ML Runtime and Signal Selection](planning/ml-runtime-and-signal-selection.md) — current/target boundary, runtime artifact plan, and learned selector decisions
 
 ---
 
@@ -251,4 +258,4 @@ What it cannot check: whether the prose still matches the code. That remains a h
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

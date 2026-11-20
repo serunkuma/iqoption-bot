@@ -16,6 +16,8 @@ IQ Option Bot is a local, documentation-driven project with three working layers
 
 There is **no live feature computation, no live signal loop, no demo/live execution, no risk manager, and no multi-instrument support.** The pipeline has not demonstrated an edge on real data. Never describe it as a working trading bot.
 
+The current four per-horizon classifiers are ML probability estimators, but the live inference loop is not connected and the final signal router is deterministic. Training currently saves `suite.pkl` using standard `pickle`; runtime `.joblib` loading and a learned direction/horizon/no-trade selector are planned, not implemented. See [docs/planning/ml-runtime-and-signal-selection.md](docs/planning/ml-runtime-and-signal-selection.md). Pocket Auto v3 is a reference repository only.
+
 ---
 
 ## 2. Repository Layout
@@ -171,6 +173,8 @@ IQ Option Traderoom
     -> reports/backtest.{json,md}
 ```
 
+This is the implemented offline path. The intended runtime path adds a validated `.joblib` loader, live feature/inference flow, and a learned signal selector; the current deterministic EV router remains the baseline. Deterministic payout, risk, and execution constraints are intended as hard gates around any future ML selection.
+
 ### Component Table
 
 | Component | Responsibility | Location |
@@ -325,6 +329,10 @@ IQ Option Traderoom
 | 2026-11-19 | Keep the two-stage regime design as research only | No validated regime rule and not enough rows per regime |
 | 2026-11-20 | Version the pre-commit hook in `.githooks/` and install it by setting `core.hooksPath` | Hooks stay reviewable with the code; no copy step into `.git/hooks` |
 | 2026-11-20 | Have the hook call `tools/check_docs.py` directly | Needs only the standard library, so it still runs when LightGBM or the venv is broken |
+| 2026-11-20 | Treat Pocket Auto v3 as reference material, not the IQ Option implementation target | Keep repository facts and project plans distinct |
+| 2026-11-20 | Plan `.joblib` as the runtime artifact naming convention; retain `suite.pkl` as current behavior until implementation changes it | Documentation must distinguish future model loading from today's offline train/backtest persistence |
+| 2026-11-20 | Evaluate a learned direction/horizon/no-trade selector against the deterministic EV router; keep payout/risk/execution constraints as hard gates | ML selection is the target, but market evidence and non-ML safety limits remain mandatory |
+| 2026-11-20 | Fail closed for ML proposals when a configured runtime artifact is missing or incompatible | No silent fallback to a stale or different model; surface an explicit diagnostic |
 
 ### Known Limitations
 
@@ -339,6 +347,8 @@ IQ Option Traderoom
 - No drift monitoring.
 - Reports omit per-fold and per-session breakdowns.
 - Receiver host/port and buffer size are still module constants.
+- No runtime artifact loader or live model inference exists; current suites use standard `pickle` in `suite.pkl`, not the planned `.joblib` runtime convention.
+- The current signal router is deterministic. A learned selector, its target, and its model scope remain unimplemented.
 
 See [`docs/system/10_LIMITATIONS_AND_BACKLOG.md`](docs/system/10_LIMITATIONS_AND_BACKLOG.md).
 
@@ -404,6 +414,8 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 15. **Never map a tie or missing exit to a direction** — keep both explicit and unusable for directional training.
 16. **Import `engine` before pandas** — protects the LightGBM Windows DLL ordering.
 17. **Do not change a version string without changing the definition** — versions trace artefacts to code.
+18. **Keep current and planned ML behavior separate** — never claim `.joblib` runtime loading or a learned router exists until implemented and tested.
+19. **Use Pocket Auto v3 only as reference material** — do not conflate its optimizer ML or signal engines with the IQ Option implementation.
 
 ---
 
@@ -427,9 +439,10 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 | 2026-11-19 | Test suite expanded to 111 unit tests | Implementation agent |
 | 2026-11-19 | Test suite expanded to 117 with `tests/test_docs.py` | Implementation agent |
 | 2026-11-20 | Added the versioned `.githooks/pre-commit` documentation check and `tools/install_hooks.py`; test suite is 121 | Implementation agent |
+| 2026-11-20 | Documented the distinction between current offline ML, deterministic routing, and the planned `.joblib` runtime and learned selector | Documentation agent |
 
 ---
 
 ## 10. Last Updated
 
-**2026-11-20 by Documentation and Implementation agents**
+**2026-11-20 by Documentation agent**

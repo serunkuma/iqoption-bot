@@ -24,6 +24,8 @@ Out of scope: live execution.
 
 The pipeline is built and tested. Validation on real captures is the remaining gate.
 
+This phase describes the current offline probability models and deterministic router. The current model suite is serialized as `suite.pkl` with standard `pickle`; the requested `.joblib` runtime artifact and learned signal selector belong to the future runtime/selection phase, not this completed offline training implementation. See [ML Runtime and Signal Selection](ml-runtime-and-signal-selection.md).
+
 | Component | Status | Location |
 |-----------|--------|----------|
 | Snapshot labels and timed exits | Done | `engine/domain/labels.py`, `engine/sampler.py` |
@@ -71,6 +73,8 @@ The pipeline is built and tested. Validation on real captures is the remaining g
 - [x] Reject a non-increasing calibration fit.
 - [x] Skip empty or one-class horizons with a reason.
 - [x] Register model artefacts with versions and a config hash.
+- [x] Persist the current suite as `suite.pkl` for offline train/backtest use.
+- [ ] Define and validate a learned direction/horizon/no-trade selector against the existing EV router (runtime integration is later work).
 - [ ] Implement the rule-based Stage 1 regime gate.
 - [ ] Train balance and imbalance models per horizon.
 - [ ] Document Approach B as research only.
@@ -140,9 +144,10 @@ The pipeline is built and tested. Validation on real captures is the remaining g
 - [Model Suite](../system/12_MODEL_SUITE.md)
 - [Signal Router](../system/13_SIGNAL_ROUTER.md)
 - [Model Validation](../system/09_MODEL_VALIDATION.md)
+- [ML Runtime and Signal Selection](ml-runtime-and-signal-selection.md)
 - [Reports and Diagnostics](../system/15_REPORTS_AND_DIAGNOSTICS.md)
 - [AMT on OTC](../research/AMT_ON_OTC.md)
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

@@ -4,6 +4,8 @@ Status: Current
 
 > The implemented architecture is four shallow calibrated binary classifiers, one per expiry horizon, trained on purged walk-forward splits. The earlier two-stage regime design is retained as research, not as the shipped path.
 
+> **Boundary:** This is the current offline training and evaluation path. `predict_vector` is not wired to live features, and the current EV router is deterministic. The planned runtime loader and learned signal selector are described in [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md).
+
 ---
 
 ## Implemented Architecture
@@ -139,7 +141,7 @@ Preconditions before implementing it:
 - Each regime must have enough usable rows to train and calibrate.
 - The regime must improve held-out EV, not just AUC.
 
-Until then, the four-horizon suite is the production path.
+Until then, the four-horizon suite remains the current offline model path.
 
 ---
 
@@ -149,6 +151,8 @@ Until then, the four-horizon suite is the production path.
 - Drift monitoring.
 - Online or incremental learning.
 - Live inference (the vector function exists; the loop does not).
+- Runtime loading of a validated `.joblib` artifact. The current model suite is saved as `suite.pkl` using Python `pickle`.
+- A learned selector for direction, expiry, and no-trade. The current router applies deterministic payout-aware EV and tie-break rules to model probabilities.
 - Ensembling, stacking, or hyperparameter search.
 - Payout forecasting: payouts are configured.
 
@@ -161,7 +165,8 @@ Until then, the four-horizon suite is the production path.
 - [Signal router](13_SIGNAL_ROUTER.md)
 - [Model validation](09_MODEL_VALIDATION.md)
 - [Labels, payouts, and EV](../data/06_LABELS_PAYOUTS_AND_EV.md)
+- [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md)
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

@@ -4,6 +4,8 @@ Status: Current
 
 > Validation exists to answer one question: does the engine have positive expected value after payout, out of sample, on data it has never seen? Everything below is designed to make a false positive hard.
 
+The current validation path evaluates the four horizon probability models and deterministic EV router. A future learned selector must be evaluated separately against that unchanged baseline; the target and release principles below do not imply that a selector or runtime model loader already exists.
+
 ---
 
 ## Principles
@@ -120,6 +122,19 @@ Before any demo or live work:
 
 If the gate fails, the correct action is to return to feature research or declare the hypothesis unsupported on OTC data. It is not to lower the hurdle.
 
+## Future Learned-Selector Gate
+
+Before any learned direction/horizon/no-trade selector is promoted beyond shadow evaluation:
+
+- Define its training target, candidate inputs, model scope, and no-trade label before examining its evaluation period.
+- Compare it with the existing horizon-classifier-plus-EV-router path on the same untouched chronological periods and report payout-adjusted outcomes.
+- Include independent captures, uncertainty/sample sufficiency, calibration where probabilities are used, and robustness across relevant sessions/instruments.
+- Keep payout, configured risk limits, execution permission, and artifact compatibility as deterministic hard gates.
+- Fail closed for ML proposals when the configured artifact is missing or incompatible; surface a diagnostic rather than silently using a fallback.
+- Do not tune the selector against the held-out evaluation slice or treat synthetic data as market evidence.
+
+These are planned promotion principles. The selector, `.joblib` runtime loader, and corresponding checks are not implemented. See [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md).
+
 ---
 
 ## Current Evidence
@@ -164,7 +179,8 @@ Synthetic data has no auction participants and no real payout behaviour. It can 
 - [Reports and diagnostics](15_REPORTS_AND_DIAGNOSTICS.md)
 - [Labels, payouts, and EV](../data/06_LABELS_PAYOUTS_AND_EV.md)
 - [AMT on OTC](../research/AMT_ON_OTC.md)
+- [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md)
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

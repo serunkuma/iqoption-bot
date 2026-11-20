@@ -152,13 +152,13 @@ AUC is recorded only when the evaluation slice contains both classes.
 
 ## Final Refit
 
-After the walk-forward and calibration steps, the shipped estimator is refit on **all** usable rows for that horizon, not only the walk-forward training slices. The metrics still describe the honest held-out slice; the refit only improves the live model. The calibrator is not refit on the full set, because that would undo the chronological separation.
+After the walk-forward and calibration steps, the persisted estimator is refit on **all** usable rows for that horizon, not only the walk-forward training slices. The metrics still describe the honest held-out slice. This estimator is intended for future inference but is not currently connected to a live path. The calibrator is not refit on the full set, because that would undo the chronological separation.
 
 ---
 
 ## Persistence
 
-`ModelSuite` is pickled with its estimators, calibrators, metrics, skipped reasons, evaluation table, and version metadata:
+The current `ModelSuite` is serialized with Python's standard `pickle` module, including its estimators, calibrators, metrics, skipped reasons, evaluation table, and version metadata. `runner.py train` writes a dated suite and `suite.pkl`; `runner.py backtest` loads that artifact. This is the implemented offline artifact path, not the intended runtime `.joblib` loader.
 
 | Field | Value |
 |-------|-------|
@@ -169,7 +169,9 @@ After the walk-forward and calibration steps, the shipped estimator is refit on 
 | `config_hash` | First 16 hex characters of a SHA-256 over the resolved config |
 | `trained_at` | UTC ISO 8601 timestamp |
 
-`ModelSuite.load` rejects a pickle that is not a `ModelSuite`.
+`ModelSuite.load` currently checks that the deserialized object is a `ModelSuite`; it does not yet enforce a runtime artifact manifest, library compatibility, artifact integrity, or a feature-contract match.
+
+The planned `.joblib` naming convention, manifest, compatibility checks, and fail-closed runtime behavior are not implemented. See [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md) before treating these as runtime guarantees.
 
 ---
 
@@ -196,7 +198,8 @@ The suite never fabricates a model and never reports a metric it cannot compute.
 - [Signal router](13_SIGNAL_ROUTER.md)
 - [Model validation](09_MODEL_VALIDATION.md)
 - [ML pipeline](08_ML_PIPELINE.md)
+- [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md)
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

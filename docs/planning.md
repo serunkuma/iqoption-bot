@@ -8,7 +8,7 @@ Status: Current
 
 ## Vision
 
-Build a documentation-driven, locally operated IQ Option trading bot that captures live ticks, reconstructs auction-style market structure, tests a payout-aware predictive model with rigorous out-of-sample validation, and only then executes trades through a paper/demo-first execution layer with hard risk controls.
+Build a documentation-driven IQ Option system that captures live ticks, reconstructs market features, trains and validates ML models, loads versioned models for inference, and uses an ML-based signal decision layer. Progress from research through shadow and paper evaluation before any separately gated demo/live operation, with deterministic risk and execution constraints.
 
 The project succeeds only if the model clears the validation gate. A working pipeline with no edge is a valid research outcome, not a failure.
 
@@ -25,13 +25,16 @@ The project succeeds only if the model clears the validation gate. A working pip
 | Features | `amt-v3` table, `core16-v1` model vector, stateless |
 | Labels | `snapshot-horizon-v1`, ties and missing exits explicit |
 | Models | Four calibrated LightGBM classifiers, purged walk-forward |
-| Router | Payout-aware EV hurdle, explicit no-trade |
+| Model artifact | Offline `suite.pkl` with standard `pickle`; no runtime `.joblib` loader |
+| Router | Deterministic payout-aware EV hurdle, explicit no-trade; not ML-based |
 | Backtest | Held-out replay through a paper broker |
 | Execution | Paper only |
 | Risk | Fixed stake, one open trade; nothing else |
 | Tests | 111 unit tests passing |
 
 No real capture has produced a result distinguishable from noise. The core hypothesis remains open.
+
+The target runtime model format is `.joblib`, and the target includes a learned selector for direction/horizon/no-trade. Both remain planning work. The learned selector must be evaluated against the current per-horizon probability models plus deterministic EV router; payout, risk, and execution constraints remain hard gates.
 
 ---
 
@@ -42,7 +45,7 @@ No real capture has produced a result distinguishable from noise. The core hypot
 | 1 | Tick capture hardening | Trustworthy, persistent tick stream | Partial |
 | 2 | Candles, features, labels | Analytical layer and dataset | Implemented offline |
 | 3 | Model and validation | Calibrated suite, honest backtest, go/no-go | Built; not validated on real data |
-| 4 | Execution and operations | Demo/live adapters, risk controls, monitoring | Not started |
+| 4 | ML runtime, signal selection, and staged operations | Validated `.joblib` loading, learned selector evaluation, shadow/paper loop, risk controls, and later gated demo/live readiness | Planning |
 
 ---
 
@@ -80,6 +83,9 @@ flowchart LR
 | M12 | 4 | Paper/demo execution with reconciliation | Open |
 | M13 | 4 | Monitoring, alerts, tested runbook | Open |
 | M14 | 4 | Live readiness review | Open |
+| M15 | 4 | Versioned `.joblib` artifact contract and fail-closed runtime loading documented and implemented | Open |
+| M16 | 4 | Learned selector evaluated against the deterministic EV-router baseline on untouched chronological data | Open |
+| M17 | 4 | Shadow and sustained live-paper inference validated against offline replay | Open |
 
 ---
 
@@ -118,6 +124,9 @@ flowchart LR
 - Is payout data available dynamically, or must it stay configured?
 - What is the real tick cadence, and what `min_ticks_per_bar` does it justify?
 - Does the two-stage regime design beat the flat four-horizon suite?
+- What target and candidate inputs should train the learned direction/horizon/no-trade selector?
+- What artifact scope and manifest are required for per-horizon or shared models?
+- What sample sufficiency and independent-capture evidence are required before selector promotion?
 - What are the risk limits and kill-switch rules?
 - Which execution route is available and permitted?
 
@@ -133,8 +142,9 @@ flowchart LR
 - [Phase 1: Tick capture hardening](planning/phase-1-tick-capture-hardening.md)
 - [Phase 2: Candles and AMT features](planning/phase-2-candles-and-amt-features.md)
 - [Phase 3: ML pipeline and validation](planning/phase-3-ml-pipeline-and-validation.md)
-- [Phase 4: Execution and operations](planning/phase-4-execution-and-operations.md)
+- [Phase 4: ML runtime, execution, and operations](planning/phase-4-execution-and-operations.md)
+- [ML runtime and signal selection](planning/ml-runtime-and-signal-selection.md)
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

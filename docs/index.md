@@ -71,7 +71,8 @@ Planned: domain primitives, market-data bridge rationale, trading philosophy, op
 - [Phase 1: Tick Capture Hardening](planning/phase-1-tick-capture-hardening.md)
 - [Phase 2: Analytical Layer](planning/phase-2-candles-and-amt-features.md)
 - [Phase 3: ML Pipeline and Validation](planning/phase-3-ml-pipeline-and-validation.md)
-- [Phase 4: Execution and Operations](planning/phase-4-execution-and-operations.md)
+- [Phase 4: ML Runtime, Execution, and Operations](planning/phase-4-execution-and-operations.md)
+- [ML Runtime and Signal Selection](planning/ml-runtime-and-signal-selection.md) — current versus target architecture, `.joblib` runtime contract, learned selector, and open decisions
 
 **Use when:** You need to know what comes next or what “done” means.
 
@@ -116,6 +117,7 @@ If a doc lacks a status label, treat it as incomplete.
 | What exists today | [system/01_OVERVIEW.md](system/01_OVERVIEW.md) |
 | How to run each command | [system/11_RUNTIME_AND_ENTRYPOINT.md](system/11_RUNTIME_AND_ENTRYPOINT.md) |
 | Every config key | [system/03_CONFIGURATION.md](system/03_CONFIGURATION.md) |
+| Target runtime ML and learned signal selection | [planning/ml-runtime-and-signal-selection.md](planning/ml-runtime-and-signal-selection.md) |
 | What one tick means | [data/01_TICK_STREAM.md](data/01_TICK_STREAM.md) |
 | Tick table and dedupe | [data/07_TICK_STORE.md](data/07_TICK_STORE.md) |
 | When a snapshot is valid | [data/08_SNAPSHOTS_AND_CONTINUITY.md](data/08_SNAPSHOTS_AND_CONTINUITY.md) |
@@ -133,4 +135,4 @@ If a doc lacks a status label, treat it as incomplete.
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-20*

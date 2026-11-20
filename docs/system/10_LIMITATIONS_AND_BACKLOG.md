@@ -43,6 +43,8 @@ Status: Current
 | Drift | No monitoring | A stale model would go unnoticed |
 | Selection | One configuration per run; no seed or fold sweep | Fragility is unmeasured |
 | Time features | Excluded from the model | Session effects are untested |
+| Runtime artifact | No runtime `.joblib` loader; offline suite uses `suite.pkl` with standard `pickle` | Trained estimators are not loaded into a live signal loop |
+| Signal selection | Current router is deterministic EV selection; no learned selector | The target ML signal decision layer has not been evaluated |
 
 ### Execution and operations
 
@@ -98,6 +100,8 @@ Status: Current
 | P2-5 | Implement a demo adapter | Order lifecycle, idempotency, reconciliation |
 | P2-6 | Complete the operational runbook | Tested start/stop/troubleshoot for every command |
 | P2-7 | Review legal and platform terms | Documented constraints before any live use |
+| P2-8 | Evaluate a learned direction/horizon/no-trade selector | Predefined target; compared with current EV-router baseline on untouched chronological data and independent captures |
+| P2-9 | Define and implement validated `.joblib` runtime loading | Versioned manifest and feature/target compatibility checks; invalid artifacts fail closed with explicit diagnostics |
 
 ---
 
@@ -119,6 +123,7 @@ Status: Current
 - [System overview](01_OVERVIEW.md)
 - [Model validation](09_MODEL_VALIDATION.md)
 - [Planning](../planning.md)
+- [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md)
 - [AMT on OTC](../research/AMT_ON_OTC.md)
 
 ---

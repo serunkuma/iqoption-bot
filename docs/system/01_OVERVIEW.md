@@ -18,11 +18,14 @@ Status: Current
 | Labels | `snapshot-horizon-v1` at 60/90/120/180s, ties and misses explicit |
 | Models | Four calibrated LightGBM classifiers, purged walk-forward, held-out evaluation slice |
 | Router | Payout-aware EV hurdle, single best horizon/direction, explicit no-trade |
+| Model artifact | Offline `suite.pkl` saved/loaded with standard `pickle`; no runtime `.joblib` loader |
 | Backtest | Held-out replay through the router and a paper broker |
 | Execution | Paper only; demo and live are rejected |
 | Risk | Fixed stake and one open trade; no daily limit, no kill switch |
 
 The capture path has been observed live. Everything downstream runs end to end on captured or synthetic data and is unit-tested. None of it has been validated as profitable, and no result to date shows an edge.
+
+The classifiers are ML, but they currently supply probabilities to a deterministic EV router. The presence of `ModelSuite.predict_vector` does not mean live inference exists: no live feature loop calls it. The intended learned selector and `.joblib` runtime path remain planning work.
 
 ---
 
@@ -106,7 +109,9 @@ reports/backtest.{json,md}
 | Feature engine | Current | Stateless, snapshot-based |
 | Labels and payout math | Current | Ties and missing exits explicit |
 | Model suite | Current | Four horizons, calibrated, walk-forward |
-| Signal router | Current | EV hurdle, reason codes |
+| Signal router | Current | Deterministic EV hurdle, tie-break, and reason codes; not ML-based |
+| Runtime model loading | Not implemented | Current `suite.pkl` is used by offline train/backtest commands; `.joblib` runtime loading is planned |
+| Learned signal selection | Planning | Evaluate learned direction/horizon/no-trade selection against the current EV router |
 | Paper backtest | Current | Held-out slice only |
 | Live features and signals | Not implemented | `serve` captures only |
 | Demo/live execution | Not implemented | Mode names validated, then rejected |
@@ -150,6 +155,7 @@ reports/backtest.{json,md}
 - [ML pipeline](08_ML_PIPELINE.md)
 - [Model validation](09_MODEL_VALIDATION.md)
 - [Limitations and backlog](10_LIMITATIONS_AND_BACKLOG.md)
+- [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md)
 
 ---
 
