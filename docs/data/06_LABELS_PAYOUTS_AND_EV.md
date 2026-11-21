@@ -2,7 +2,7 @@
 
 Status: Current
 
-> This document defines the prediction target, binary-option payoff math, and the evaluation gate. It is the contract between the data pipeline and the ML pipeline. Labels are attached to snapshots, priced at a delayed entry tick, and versioned `snapshot-horizon-v1`.
+> This document defines the prediction target, binary-option payoff math, and the evaluation gate. Labels are attached to candle-close snapshots, priced at a delayed entry tick, and versioned `snapshot-horizon-v1`.
 
 ---
 
@@ -45,12 +45,12 @@ A model with 54% accuracy is profitable at 90% payout and unprofitable at 70% pa
 
 ## Prediction Target
 
-Predictions are attached to **snapshots**, not to every tick. A snapshot is a validated decision point inside a forming minute, by default `:30`.
+Predictions are attached to **snapshots**, not to every tick. One snapshot is emitted per eligible completed minute at candle close.
 
 | Element | Definition |
 |---------|------------|
-| Decision time | `forming_start + snapshot offset` |
-| Features | Ticks at or before the decision time |
+| Decision time | End of the last completed candle |
+| Features | The contiguous completed-candle window through that candle |
 | Entry time | First tick at or after `decision + 250ms` within 1s tolerance |
 | Entry price | That tick's price |
 | Horizons | 60, 90, 120, 180 seconds (configurable) |
@@ -72,19 +72,19 @@ label_h = call    if exit_price_h > entry_price
 
 Defaults: `entry_delay_ms = 250`, `entry_tolerance_seconds = 1.0`, `exit_tolerance_seconds = 5.0`, `tie_policy = exclude`.
 
-The exit is measured from the **actual entry time**, not from the snapshot time. A 60s horizon from a snapshot at `:30` that entered at `:30.31` expires at `:31:30.31`.
+The exit is measured from the **actual entry time**, not from the decision time. A 60s horizon from a candle close at `12:07:00` that entered at `12:07:00.31` expires at `12:08:00.31`.
 
 Ties are never mapped to Put. A missing exit is never mapped to a directional label. Both stay explicit, and rows that are not `call` or `put` are marked unusable for directional training.
 
 ### Why snapshot labels
 
-Binary options let the trader enter at an arbitrary moment, including mid-candle, so labels are priced from an actual tick. But evaluating every tick would create thousands of near-identical rows per minute with overlapping outcomes, dominated by whichever microsecond was sampled.
+The candle-close cadence defines one reproducible decision point per minute. Entry and exit are still priced from actual events after the decision. Evaluating every tick would create thousands of near-identical rows with overlapping outcomes.
 
-Fixed snapshot offsets give a small, reproducible set of decision points while keeping entry and exit priced from real ticks. The cost is still overlapping observations — a 180s horizon sampled every 30s overlaps six rows — which is handled at validation time with purge and overlap weights.
+The cost is overlapping observations: a 180-second horizon sampled once per minute still overlaps multiple rows. Validation handles this with purging and overlap weights.
 
-### Candles are context, not decisions
+### Candle close is the decision point
 
-1-minute candles provide the macro, fast, and forming context windows. They define value, volatility, and activity baselines. They do not create decision points or labels.
+The decision candle is included in the macro and fast context windows. The forming candle is excluded. No empty-minute candle or decision is fabricated; in streaming mode, a close is recognized when the first event in a later minute arrives.
 
 ---
 
@@ -183,8 +183,9 @@ Required columns:
 | `exit_delay_seconds` | Delay beyond the exact horizon, or null |
 | `label` | `call`, `put`, `tie`, or `missing` |
 | `usable` | `1` when the row may be used for directional training |
-| `feature_version` | `amt-v3` |
-| `core_feature_version` | `core16-v1` |
+| `feature_version` | `amt-v4` |
+| `core_feature_version` | `core16-v2` |
+| `decision_version` | `candle-close-v1` |
 | `label_version` | `snapshot-horizon-v1` |
 
 Payout is not stored per row; it is configured per horizon in `[router.payouts]`. Diagnostics such as `profile_missing` and `gap_in_window` are carried by the feature columns.
@@ -196,7 +197,7 @@ Exclude rows when:
 - `label` is `tie` and `tie_policy = "exclude"`.
 - `label` is `missing`.
 - The snapshot failed the continuity gate (it is never built).
-- The tick is an exact duplicate (it is dropped in the store).
+- No event is removed as an exact duplicate; repeated timestamp/price pairs are preserved.
 
 Exclusions must be counted and reported, not silently dropped.
 
@@ -239,4 +240,4 @@ If the gate fails, the project returns to feature research or declares the hypot
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

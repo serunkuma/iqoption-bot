@@ -25,7 +25,7 @@ Status: Current
 ```text
 tick store
   rows                        : 28800
-  duplicates dropped          : 0
+  duplicate (timestamp, price): 0
   out-of-order rows           : 0
   first tick                  : 2026-11-18 12:00:00+00:00
   last tick                   : 2026-11-18 14:59:59+00:00
@@ -33,7 +33,7 @@ tick store
   minutes with ticks          : 180
 ```
 
-Use it before a build: `minutes with ticks` is the hard ceiling on candidate snapshots, and `duplicates dropped` shows whether the stream is repeating frames.
+Use it before a build: `minutes with ticks` is the hard ceiling on candidate snapshots, and the duplicate counter shows repeated timestamp/price pairs. Events are preserved; the counter does not mean they were removed.
 
 `out-of-order rows` counts adjacent timestamp inversions in the file order, measured before sorting.
 
@@ -46,7 +46,7 @@ The build summary combines store statistics, sampler exclusions, and artefact si
 | Key | Meaning |
 |-----|---------|
 | `ticks` | Rows in the canonical store |
-| `duplicates_dropped` | Exact `(timestamp, price)` duplicates removed |
+| `duplicate_rows` | Exact `(timestamp, price)` duplicate pairs observed and preserved |
 | `out_of_order` | Timestamp inversions seen on load |
 | `candidate_minutes` | Whole minutes containing at least one tick |
 | `snapshots` | Validated snapshots |
@@ -57,7 +57,6 @@ The build summary combines store statistics, sampler exclusions, and artefact si
 | `skipped_insufficient_history` | Fewer than `macro_candles` earlier minutes |
 | `skipped_gap` | Macro window is not contiguous |
 | `skipped_sparse_bar` | A completed bar has fewer than `min_ticks_per_bar` ticks |
-| `skipped_no_pre_offset_tick` | No tick at or before the snapshot offset |
 | `skipped_no_entry_tick` | No tick within the entry delay plus tolerance |
 | `snapshots_with_missing_exits` | At least one horizon had no exit tick |
 
@@ -116,7 +115,7 @@ These numbers are small-sample estimates. `eval` in the dozens is enough to sani
 | `skipped_below_hurdle` | Routed snapshot whose best EV failed `router.min_ev` |
 | `skipped_horizons` | Horizon to skip reason (JSON only) |
 
-High `skipped_no_model` is expected: only the held-out slice is tradable, roughly the last 30% of walk-forward out-of-sample rows.
+High `skipped_no_model` is expected: only the held-out evaluation slice is replayable.
 
 ### Concurrency
 
@@ -164,4 +163,4 @@ A negative result is a valid research outcome. The reports exist to make that vi
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

@@ -2,7 +2,7 @@
 
 Status: Current
 
-> The engine is tested with `unittest` at the component boundary: each module is exercised with real objects, synthetic ticks, and explicit failure cases. There is no live-to-offline parity test yet, because there is no live inference path.
+> The engine is tested with `unittest` across offline research, streaming persistence, candle-close runtime, artifact validation, and replay. Runtime/offline parity has unit coverage, but sustained real-feed parity and edge validation remain open.
 
 ---
 
@@ -14,13 +14,7 @@ Status: Current
 
 Import `engine` before pandas in any ad-hoc script; see the Windows LightGBM caveat below.
 
-Expected tail:
-
-```text
-Ran 121 tests
-
-OK
-```
+The current suite includes 159 tests. Use the actual output from the current checkout as the source of truth when reporting the count.
 
 ---
 
@@ -28,21 +22,15 @@ OK
 
 | File | Tests | Covers |
 |------|-------|--------|
-| `test_config.py` | 10 | Defaults, unknown keys, section types, offset uniqueness and range, horizon ordering, payout coverage, mode validation, config hash stability |
-| `test_store.py` | 10 | CSV contract, naive timestamp rejection, non-positive price, `active_id` mismatch, dedupe, ordering, `tick_id` on reload, point-in-time lookups |
-| `test_timeframes.py` | 7 | Bucket boundaries, forming vs completed, gap detection, unsorted input, tick counts |
-| `test_profile.py` | 6 | Worked example, POC tie-breaks, bin edges, single bin, internal gap, insufficient ticks |
-| `test_sampler.py` | 11 | Continuity gate, insufficient history, gaps, sparse bars, offset slicing, entry delay, exit tolerance, missing exits, single-instrument filtering |
-| `test_features.py` | 9 | Exact core feature list and order, null propagation, layer ratios, forming truncation, profile/volatility missing flags, diagnostic table parity |
-| `test_labels.py` | 7 | Call/put/tie classification, tie policy, missing exits, long-format rows, label version |
-| `test_models.py` | 13 | Overlap weights, calibrator monotonicity, rejected Platt slope, identity clipping, per-horizon training, evaluation table shape, held-out slice disjoint from calibration, skipped horizons, pickle round-trip |
-| `test_router.py` | 10 | EV math, breakeven, call/put candidate selection, hurdle rejection, reason codes, tie-break modes, malformed probabilities |
-| `test_execution.py` | 11 | Mode rejection, open limits, expired-trade slot release, win/loss/void resolution, double resolve, summary, journal |
-| `test_backtest.py` | 5 | Only held-out snapshots routed, trades reference evaluated snapshots, one-open-trade limit, no-model no-trade, horizon resolution |
-| `test_reports.py` | 6 | Reliability bins, Brier/AUC/ECE, single-class safety, concurrency, JSON/Markdown writing without `tabulate` |
-| `test_receiver.py` | 5 | Identity formatting, acceptance and buffering, rejection paths, asset-map loading |
-| `test_docs.py` | 6 | Missing status, broken link, ignored external/anchor/mailto links, orphan doc, and a clean sweep of this repository |
-| `test_hooks.py` | 4 | Hook script contents, unset and installed `core.hooksPath`, missing hooks directory |
+| `test_config.py` | Configuration defaults, schema validation, runtime/stream settings |
+| `test_store.py` | File contracts, duplicate preservation, stable ordering, point-in-time lookups |
+| `test_timeframes.py`, `test_profile.py` | Candle boundaries, gaps, profile calculations |
+| `test_sampler.py`, `test_features.py`, `test_labels.py` | Candle-close snapshots, feature causality/versioning, labels |
+| `test_models.py`, `test_router.py`, `test_backtest.py`, `test_reports.py` | Training, calibration, deterministic routing, held-out replay, reports |
+| `test_stream.py` | Sequencing, event/candle persistence, recovery, late events, storage failures |
+| `test_runtime.py`, `test_replay.py` | Artifact validation, runtime decisions/gates/journals, replay parity |
+| `test_execution.py`, `test_receiver.py` | Paper broker and receiver contracts |
+| `test_docs.py`, `test_hooks.py` | Documentation checker and hook installation |
 
 ---
 
@@ -82,7 +70,7 @@ If the crash appears in a new environment, check import order before suspecting 
 
 | Gap | Risk |
 |-----|------|
-| Live-to-offline parity | Live inference does not exist, so there is nothing to compare |
+| Sustained live-to-offline parity | Runtime/replay tests cover mechanics; no sustained independent real-feed run has been validated |
 | Long-run capture | Reconnects and multi-hour sessions are untested |
 | Real tick density | Synthetic ticks are far denser and cleaner than a real feed |
 | Calibration on real data | Only synthetic and small samples have been exercised |
@@ -123,8 +111,8 @@ The remainder is still human work:
 
 - [ ] No doc points at removed `sources/`, `scripts/`, `amt/`, or root `receiver.py`.
 - [ ] Commands in `AGENTS.md`, `README.md`, and `RUNBOOK.md` match the real CLI.
-- [ ] Version strings are `amt-v3`, `core16-v1`, `snapshot-horizon-v1`, `1m-clock-v1`.
-- [ ] No doc claims live execution, live features, or multi-instrument support.
+- [ ] Version strings match the current contract: `amt-v4`, `core16-v2`, `snapshot-horizon-v1`, `1m-clock-v1`, `candle-close-v1`, `joblib-v1`.
+- [ ] No doc claims broker execution, a learned selector, or multi-instrument support.
 - [ ] Counts quoted in docs (test totals, column counts) match a fresh run.
 
 The checker validates structure, not truth. A doc can pass every check and still describe behaviour that no longer exists.
@@ -161,4 +149,4 @@ The hook is not a CI replacement. It only runs on machines where `tools/install_
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

@@ -28,15 +28,15 @@ Planned: domain primitives, market-data bridge rationale, trading philosophy, op
 ## Data — What Flows Through the System
 
 - [Data guide](data/README.md) — What belongs in this category
-- [Tick Stream Contract](data/01_TICK_STREAM.md) — Tick envelope, fields, buffering, `received_at`, JSONL capture
+- [Tick Stream Contract](data/01_TICK_STREAM.md) — Tick envelope, fields, buffering, `received_at`, and event semantics
 - [Asset Identities](data/02_ASSET_IDENTITIES.md) — `active_id`, `asset_names.json`, configured metadata
 - [1-Minute Candle Aggregation](data/03_CANDLE_AGGREGATION.md) — Whole-minute bucketing and forming bars
 - [TPO and Value Area](data/04_TPO_VALUE_AREA.md) — POC/VAH/VAL rules and worked example
 - [AMT Feature Specification](data/05_AMT_FEATURE_SPEC.md) — Feature families, formulas, causality, versioning
 - [Labels, Payouts, and Expected Value](data/06_LABELS_PAYOUTS_AND_EV.md) — Snapshot labels, breakeven, EV, no-trade
-- [Tick Store](data/07_TICK_STORE.md) — Schema, ingestion rules, dedupe, point-in-time lookup
-- [Snapshots and Continuity](data/08_SNAPSHOTS_AND_CONTINUITY.md) — Continuity gate, delayed entry, exits
-- [Model Inputs](data/09_MODEL_INPUTS.md) — `core16-v1` vector and `amt-v3` diagnostics
+- [Tick Store](data/07_TICK_STORE.md) — Batch tick table, sequence ordering, duplicate preservation, point-in-time lookup
+- [Snapshots and Continuity](data/08_SNAPSHOTS_AND_CONTINUITY.md) — Candle-close cadence, continuity gate, delayed entry, exits
+- [Model Inputs](data/09_MODEL_INPUTS.md) — `core16-v2` vector and `amt-v4` diagnostics
 
 **Use when:** You need exact data contracts, formulas, or schemas.
 
@@ -60,6 +60,7 @@ Planned: domain primitives, market-data bridge rationale, trading philosophy, op
 - [Signal Router](system/13_SIGNAL_ROUTER.md) — EV hurdle, candidate selection, reason codes
 - [Execution and Resolution](system/14_EXECUTION_AND_RESOLUTION.md) — Paper broker, resolution, journal
 - [Reports and Diagnostics](system/15_REPORTS_AND_DIAGNOSTICS.md) — Command output and report fields
+- [Streaming Runtime and Store](system/16_STREAMING_RUNTIME_AND_STORE.md) — Live ingestion, persistence, candle-close inference, paper decisions, and replay
 
 **Use when:** You need to implement, operate, or debug the system.
 
@@ -116,6 +117,7 @@ If a doc lacks a status label, treat it as incomplete.
 | New to the project | [00_ORIENTATION.md](00_ORIENTATION.md) |
 | What exists today | [system/01_OVERVIEW.md](system/01_OVERVIEW.md) |
 | How to run each command | [system/11_RUNTIME_AND_ENTRYPOINT.md](system/11_RUNTIME_AND_ENTRYPOINT.md) |
+| Streaming runtime and store | [system/16_STREAMING_RUNTIME_AND_STORE.md](system/16_STREAMING_RUNTIME_AND_STORE.md) |
 | Every config key | [system/03_CONFIGURATION.md](system/03_CONFIGURATION.md) |
 | Target runtime ML and learned signal selection | [planning/ml-runtime-and-signal-selection.md](planning/ml-runtime-and-signal-selection.md) |
 | What one tick means | [data/01_TICK_STREAM.md](data/01_TICK_STREAM.md) |
@@ -135,4 +137,4 @@ If a doc lacks a status label, treat it as incomplete.
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

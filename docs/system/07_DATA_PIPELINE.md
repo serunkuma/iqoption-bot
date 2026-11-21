@@ -2,7 +2,7 @@
 
 Status: Current
 
-> The pipeline runs end to end: browser frame to JSONL capture, Parquet tick store, gated snapshots, feature rows, labels, and a joined dataset. It is batch, offline from the perspective of `build`; only capture is live.
+> The system has a live streaming store/runtime path and an offline file-to-dataset research path. `build`, `train`, and `backtest` remain batch commands; `serve` can make paper decisions from streaming candle closes.
 
 ---
 
@@ -13,16 +13,17 @@ Status: Current
 | 1 | Intercept | Page WebSocket message | Raw JSON payload | `chrome-extension/inject.js` |
 | 2 | Forward | Raw payload | WebSocket frame | `chrome-extension/content.js` |
 | 3 | Accept | Frame | Validated tick with `received_at` | `components/receiver.py` |
-| 4 | Persist | Accepted tick | `data/raw/ticks-<date>.jsonl` | `runner.py serve` |
-| 5 | Load | JSONL / CSV / Parquet | `TickStore` | `engine/store.py` |
-| 6 | Sample | Tick store | `Snapshot` list + exclusion report | `engine/sampler.py` |
-| 7 | Feature | Snapshot | `core16-v1` + `amt-v3` row | `engine/features.py` |
-| 8 | Label | Snapshot | Long-format label rows | `engine/domain/labels.py` |
-| 9 | Join | Feature + label rows | `dataset.parquet` | `engine/build.py` |
-| 10 | Train | Dataset | Calibrated suite | `engine/models.py` |
-| 11 | Backtest | Dataset + suite | Paper trades + reports | `engine/backtest.py` |
+| 4 | Persist stream | Accepted event | Hourly event/candle parts and state | `engine/stream/` |
+| 5 | Runtime decision | Closed candle + rolling window | Paper decision or abstention | `engine/runtime.py` |
+| 6 | Load offline file | JSONL / CSV / Parquet | `TickStore` | `engine/store.py` |
+| 7 | Sample | Tick store | Candle-close `Snapshot` list + exclusion report | `engine/sampler.py` |
+| 8 | Feature | Snapshot | `core16-v2` + `amt-v4` row | `engine/features.py` |
+| 9 | Label | Snapshot | Long-format label rows | `engine/domain/labels.py` |
+| 10 | Join | Feature + label rows | `dataset.parquet` | `engine/build.py` |
+| 11 | Train | Dataset | Calibrated `.joblib` suite + manifest | `engine/models.py` |
+| 12 | Backtest | Dataset + suite | Held-out paper trades + reports | `engine/backtest.py` |
 
-Steps 1–4 are live. Steps 5–11 run when commanded, on whatever capture exists.
+Steps 1–5 are live process work when `serve` is running. Offline steps 6–12 run when commanded. `serve` does not write the former daily raw JSONL capture.
 
 ---
 
@@ -30,21 +31,21 @@ Steps 1–4 are live. Steps 5–11 run when commanded, on whatever capture exist
 
 ### 1–4. Capture
 
-The extension forwards only frames whose outer `name` is `"candle-generated"`. The receiver validates the envelope, stamps `received_at` with a local offset, buffers the last 500 payloads per `active_id` in memory, and calls the JSONL sink.
+The extension forwards only frames whose outer `name` is `"candle-generated"`. The receiver validates the envelope, stamps `received_at` with a local offset, buffers the last 500 payloads per `active_id` in memory, and calls the configured sink. `runner.py serve` connects it to `StreamStore`.
 
 The broker's `at` and `volume` fields stay inside `payload`. They are evidence, not data. `received_at` is the project's only tick timestamp.
 
-### 5. Store
+### 6. Offline Tick Store
 
-`TickStore` enforces the tick contract: aware timestamp, positive numeric price, optional `active_id`, exact `(timestamp, price)` dedupe, ascending order, contiguous `tick_id`. Load statistics record duplicates and out-of-order rows.
+`TickStore` enforces aware timestamps and positive numeric prices, records duplicate timestamp/price pairs without removing them, and stably sorts by `(timestamp, sequence)`. Live ingestion instead preserves arrival order and rejects events too late to update the forming candle.
 
-### 6. Sample
+### 7. Sample
 
-For each whole minute with ticks, the sampler requires `macro_candles` contiguous earlier minutes, dense enough bars, a tick at or before the snapshot offset, and an entry tick inside the delay plus tolerance. It truncates the forming bar at the snapshot time and resolves one exit per horizon from the actual entry time.
+The sampler creates one decision snapshot per eligible minute. Its window includes `macro_candles` contiguous completed candles through the decision candle; each must meet the density gate. It then finds a delayed entry tick and resolves one exit per horizon from the actual entry time.
 
-### 7. Feature
+### 8. Feature
 
-One row per snapshot. The model vector is the 16 `core16-v1` features; the rest of the row is `amt-v3` diagnostics. The function is stateless and never reads past the snapshot.
+One row per snapshot. The model vector is the 16 `core16-v2` features; the rest of the row is `amt-v4` diagnostics. The stateless function receives completed bars only.
 
 ### 8. Label
 
@@ -64,8 +65,9 @@ Features and labels are merged on `snapshot_id`. The label table's `timestamp` a
 | `timestamp` | Feature | Snapshot time, ISO 8601 with offset |
 | `active_id` | Feature | Instrument |
 | `price` | Feature | Price at the snapshot |
-| `feature_version` | Feature | `amt-v3` |
-| `core_feature_version` | Feature | `core16-v1` |
+| `feature_version` | Feature | `amt-v4` |
+| `core_feature_version` | Feature | `core16-v2` |
+| `decision_version` | Feature | `candle-close-v1` |
 | 16 core columns | Feature | Model inputs |
 | 31 diagnostic columns | Feature | Research and debugging |
 | `entry_timestamp` | Label | Actual entry tick time |
@@ -91,7 +93,6 @@ Exclusions happen once, in the sampler and the label layer, and are counted:
 | Too little history | `skipped_insufficient_history` |
 | Gap in the macro window | `skipped_gap` |
 | Sparse completed bar | `skipped_sparse_bar` |
-| No tick at or before the offset | `skipped_no_pre_offset_tick` |
 | No entry tick | `skipped_no_entry_tick` |
 | Missing exit | `snapshots_with_missing_exits`, `usable = 0` |
 | Tie with `exclude` | `usable = 0` |
@@ -116,11 +117,11 @@ Changing any of the following requires a full rebuild and a version bump where a
 
 ## What the Pipeline Does Not Do
 
-- It does not stream: `build` reads a file, not a live socket.
-- It does not write candles to storage; minute buckets exist only inside the build.
+- `build` does not read the streaming directory directly; it reads a file.
+- It does not create candles for empty minutes or accept late stream updates into finalized candles.
 - It does not append incrementally to an existing store.
-- It does not handle multiple instruments; the sampler filters to one.
-- It does not run live features or live signals.
+- It does not select multiple instruments; the runtime and sampler use one configured `active_id`.
+- It does not place demo/live orders or use a learned signal selector.
 
 ---
 
@@ -133,4 +134,4 @@ Changing any of the following requires a full rebuild and a version bump where a
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

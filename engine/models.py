@@ -11,7 +11,11 @@ skipped. The router then has no probability for that horizon.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import pickle
+import platform
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,9 +35,10 @@ except ImportError:  # pragma: no cover - environment dependent
     _lightgbm = None
     LIGHTGBM_AVAILABLE = False
 
+import joblib
 import pandas as pd
 
-from .config import Config
+from .config import MODEL_FORMAT_VERSION, Config
 from .features import CORE_FEATURES
 
 EPS = 1e-6
@@ -149,6 +154,35 @@ class HorizonModel:
 EVALUATION_COLUMNS = ("snapshot_id", "horizon_seconds", "probability", "label")
 
 
+class ModelArtifactError(ValueError):
+    """Raised when a runtime artifact is missing, corrupt, or incompatible."""
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _environment() -> dict[str, str]:
+    versions = {
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+    }
+    try:
+        import sklearn
+
+        versions["scikit-learn"] = sklearn.__version__
+    except ImportError:  # pragma: no cover - optional
+        pass
+    if LIGHTGBM_AVAILABLE and _lightgbm is not None:
+        versions["lightgbm"] = getattr(_lightgbm, "__version__", "unknown")
+    return versions
+
+
 @dataclass
 class ModelSuite:
     models: dict[int, HorizonModel] = field(default_factory=dict)
@@ -156,12 +190,18 @@ class ModelSuite:
     feature_version: str = ""
     core_feature_version: str = ""
     label_version: str = ""
+    decision_version: str = ""
+    candle_version: str = ""
+    model_format_version: str = MODEL_FORMAT_VERSION
+    instrument: dict[str, Any] = field(default_factory=dict)
     config_hash: str = ""
     trained_at: str = ""
     skipped: dict[int, str] = field(default_factory=dict)
     evaluation: pd.DataFrame = field(default_factory=lambda: pd.DataFrame(
         columns=list(EVALUATION_COLUMNS)
     ))
+    artifact_id: str = ""
+    manifest: dict[str, Any] = field(default_factory=dict)
 
     def predict_vector(self, values: list[float | None]) -> dict[int, float]:
         """Return calibrated Call probabilities keyed by horizon (live path)."""
@@ -194,19 +234,182 @@ class ModelSuite:
         }
 
     def save(self, path: str | Path) -> Path:
+        """Persist the suite.
+
+        A ``.joblib`` destination is the runtime format: it writes the artifact
+        plus a sidecar manifest. Any other suffix keeps the legacy pickle format
+        for old analysis suites.
+        """
+
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with destination.open("wb") as handle:
-            pickle.dump(self, handle)
+
+        if destination.suffix.lower() != ".joblib":
+            with destination.open("wb") as handle:
+                pickle.dump(self, handle)
+            return destination
+
+        joblib.dump(self, destination)
+        artifact_id = f"sha256:{_sha256(destination)}"
+        self.artifact_id = artifact_id
+        manifest = self.build_manifest(artifact_id)
+        self.manifest = manifest
+        self.manifest_path(destination).write_text(
+            json.dumps(manifest, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
         return destination
 
+    @staticmethod
+    def manifest_path(path: str | Path) -> Path:
+        destination = Path(path)
+        return destination.with_name(destination.name + ".manifest.json")
+
+    def build_manifest(self, artifact_id: str) -> dict[str, Any]:
+        return {
+            "artifact_id": artifact_id,
+            "format_version": MODEL_FORMAT_VERSION,
+            "created_at": self.trained_at or datetime.now(timezone.utc).isoformat(),
+            "feature_names": list(self.feature_names),
+            "feature_version": self.feature_version,
+            "core_feature_version": self.core_feature_version,
+            "label_version": self.label_version,
+            "decision_version": self.decision_version,
+            "candle_version": self.candle_version,
+            "instrument": dict(self.instrument),
+            "config_hash": self.config_hash,
+            "horizons": sorted(self.models),
+            "skipped": {str(key): value for key, value in sorted(self.skipped.items())},
+            "rows": {
+                str(horizon): model.metrics.rows
+                for horizon, model in sorted(self.models.items())
+            },
+            "evaluation_rows": {
+                str(horizon): model.metrics.evaluation_rows
+                for horizon, model in sorted(self.models.items())
+            },
+            "metrics": {
+                str(horizon): model.metrics.as_dict()
+                for horizon, model in sorted(self.models.items())
+            },
+            "split": {
+                "n_splits": "purged-walk-forward",
+                "calibration_share": CALIBRATION_SHARE,
+                "evaluation": "later share of walk-forward OOS",
+            },
+            "environment": _environment(),
+        }
+
     @classmethod
-    def load(cls, path: str | Path) -> "ModelSuite":
-        with Path(path).open("rb") as handle:
-            suite = pickle.load(handle)
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        require_manifest: bool = False,
+    ) -> "ModelSuite":
+        """Load a suite.
+
+        ``.joblib`` artifacts require a sidecar manifest and a matching hash.
+        Pickle remains readable for old analysis suites, but runtime callers
+        must pass ``require_manifest=True`` so a pickle can never be served.
+        """
+
+        source = Path(path)
+        if not source.is_file():
+            raise ModelArtifactError(f"model artifact not found: {source}")
+
+        if source.suffix.lower() == ".joblib":
+            try:
+                suite = joblib.load(source)
+            except Exception as exc:
+                raise ModelArtifactError(f"cannot read {source}: {exc}") from exc
+            if not isinstance(suite, cls):
+                raise ModelArtifactError(f"{source} does not contain a ModelSuite")
+
+            manifest_file = cls.manifest_path(source)
+            if not manifest_file.is_file():
+                raise ModelArtifactError(
+                    f"manifest not found for {source}: {manifest_file.name}"
+                )
+            try:
+                manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ModelArtifactError(
+                    f"manifest is unreadable: {manifest_file}"
+                ) from exc
+
+            expected = manifest.get("artifact_id", "")
+            actual = f"sha256:{_sha256(source)}"
+            if expected != actual:
+                raise ModelArtifactError(
+                    f"artifact hash mismatch for {source}: "
+                    f"manifest={expected} actual={actual}"
+                )
+            if manifest.get("format_version") != MODEL_FORMAT_VERSION:
+                raise ModelArtifactError(
+                    "artifact format is incompatible: "
+                    f"{manifest.get('format_version')!r} != {MODEL_FORMAT_VERSION!r}"
+                )
+            if tuple(manifest.get("feature_names", ())) != tuple(CORE_FEATURES):
+                raise ModelArtifactError(
+                    "artifact feature order does not match the runtime contract"
+                )
+            suite.artifact_id = expected
+            suite.manifest = manifest
+            return suite
+
+        if require_manifest:
+            raise ModelArtifactError(
+                f"runtime inference requires a .joblib artifact, got {source.name}"
+            )
+        try:
+            with source.open("rb") as handle:
+                suite = pickle.load(handle)
+        except Exception as exc:
+            raise ModelArtifactError(f"cannot read {source}: {exc}") from exc
         if not isinstance(suite, cls):
-            raise TypeError(f"{path} does not contain a ModelSuite")
+            raise ModelArtifactError(f"{source} does not contain a ModelSuite")
         return suite
+
+    def validate(self, config: Config | None = None) -> list[str]:
+        """Return compatibility problems. An empty list means the suite is usable."""
+
+        problems: list[str] = []
+        if self.model_format_version != MODEL_FORMAT_VERSION:
+            problems.append(
+                f"model format {self.model_format_version!r} != {MODEL_FORMAT_VERSION!r}"
+            )
+        if tuple(self.feature_names) != tuple(CORE_FEATURES):
+            problems.append("feature names or order do not match core16-v2")
+        if not self.models:
+            problems.append("artifact contains no trained horizon models")
+        if config is None:
+            return problems
+
+        checks = (
+            ("feature_version", self.feature_version, config.feature_version),
+            ("core_feature_version", self.core_feature_version, config.core_feature_version),
+            ("label_version", self.label_version, config.label_version),
+            ("decision_version", self.decision_version, config.decision_version),
+            ("candle_version", self.candle_version, config.candle_version),
+        )
+        for name, actual, expected in checks:
+            if actual != expected:
+                problems.append(f"{name} {actual!r} != {expected!r}")
+
+        artifact_active = self.instrument.get("active_id")
+        configured = config.instrument.active_id
+        if configured is not None and artifact_active is not None:
+            if int(artifact_active) != int(configured):
+                problems.append(
+                    f"instrument active_id {artifact_active} != configured {configured}"
+                )
+
+        expected_horizons = set(config.labels.horizons_seconds)
+        missing = sorted(expected_horizons - set(self.models))
+        if missing:
+            problems.append(f"artifact is missing horizons {missing}")
+        return problems
 
 
 # -- training --------------------------------------------------------------
@@ -345,6 +548,14 @@ def train_suite(dataset: pd.DataFrame, config: Config, config_hash: str = "") ->
         feature_version=config.feature_version,
         core_feature_version=config.core_feature_version,
         label_version=config.label_version,
+        decision_version=config.decision_version,
+        candle_version=config.candle_version,
+        instrument={
+            "symbol": config.instrument.symbol,
+            "active_id": config.instrument.active_id,
+            "pip_size": config.instrument.pip_size,
+            "bin_size": config.instrument.bin_size,
+        },
         config_hash=config_hash,
         trained_at=datetime.now(timezone.utc).isoformat(),
     )

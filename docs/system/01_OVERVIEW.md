@@ -2,7 +2,7 @@
 
 Status: Current
 
-> The repository is a working offline prediction engine fed by a live tick capture, plus a paper-only backtest. It does not place orders. This document separates what runs today from what is still planned.
+> The repository is a local streaming and offline research system. A candle-close runtime can make paper decisions from a validated model artifact; it does not place broker orders. This document separates what runs today from what remains planned or unvalidated.
 
 ---
 
@@ -11,21 +11,23 @@ Status: Current
 | Layer | State |
 |-------|-------|
 | Tick capture | Live, Chrome MV3 extension plus `components/receiver.py` |
-| Durable capture | JSONL per UTC day under `data/raw/` when `serve` runs |
-| Tick store | Parquet, validated, ordered, deduplicated |
-| Snapshots | Continuity-gated evaluation points at configurable minute offsets |
-| Features | Stateless `amt-v3` table with a 16-feature `core16-v1` model vector |
+| Durable capture | Event and candle Parquet parts under `data/stream/`; legacy JSONL files remain valid build inputs |
+| Tick store | Batch Parquet with sequence; exact duplicates preserved; stable timestamp/sequence ordering |
+| Stream store | Sequence assignment, candle construction, late rejection, gap counters, persistence and state recovery |
+| Snapshots | One candle-close decision point per eligible minute with contiguous completed candles |
+| Features | Stateless `amt-v4` table with a 16-feature `core16-v2` model vector |
 | Labels | `snapshot-horizon-v1` at 60/90/120/180s, ties and misses explicit |
 | Models | Four calibrated LightGBM classifiers, purged walk-forward, held-out evaluation slice |
 | Router | Payout-aware EV hurdle, single best horizon/direction, explicit no-trade |
-| Model artifact | Offline `suite.pkl` saved/loaded with standard `pickle`; no runtime `.joblib` loader |
+| Model artifact | Timestamped `.joblib` plus compatibility manifest; legacy pickle remains for analysis/backtest |
 | Backtest | Held-out replay through the router and a paper broker |
+| Runtime | Candle-close inference, deterministic EV routing, paper decisions and journals |
 | Execution | Paper only; demo and live are rejected |
-| Risk | Fixed stake and one open trade; no daily limit, no kill switch |
+| Runtime gates | One open paper trade, cooldown, configured daily loss stop; no complete risk manager or kill switch |
 
 The capture path has been observed live. Everything downstream runs end to end on captured or synthetic data and is unit-tested. None of it has been validated as profitable, and no result to date shows an edge.
 
-The classifiers are ML, but they currently supply probabilities to a deterministic EV router. The presence of `ModelSuite.predict_vector` does not mean live inference exists: no live feature loop calls it. The intended learned selector and `.joblib` runtime path remain planning work.
+The classifiers supply probabilities to a deterministic EV router. The learned selector remains planning work. The runtime is not an order execution adapter, and neither tests nor synthetic metrics establish an edge.
 
 ---
 
@@ -42,33 +44,20 @@ chrome-extension/content.js    isolated world, reconnect + queue
         |  ws://localhost:8765
         v
 components/receiver.py         validate, stamp received_at, buffer, sink
-        |  JsonlTickSink
+        |  runner.py serve
         v
-data/raw/ticks-YYYY-MM-DD.jsonl
-        |  runner.py build
+engine.stream.StreamStore      sequence, events, candles, state, hourly parts
+        |                            \
+        v                             v
+engine.runtime.RuntimeEngine    paper decisions / JSONL journals
+        | candle-close features
         v
-engine.store.TickStore         ordered, deduplicated, point-in-time
-        |
-        v
-engine.sampler                 continuity gate, delayed entry, exits
-        |
-        v
-engine.features                core16-v1 + amt-v3 diagnostics
-        |
-        v
-data/dataset.parquet           features joined to labels
-        |
-        v
-engine.models                  four calibrated horizon classifiers
-        |
-        v
-engine.router                  EV hurdle, one proposal or no-trade
-        |
-        v
-engine.backtest + execution    paper trades, held-out replay
-        |
-        v
-reports/backtest.{json,md}
+core16-v2 -> .joblib -> EV router -> PaperBroker
+
+Offline path:
+CSV / JSONL / Parquet -> TickStore -> candle-close sampler
+    -> core16-v2 / amt-v4 + labels -> dataset.parquet
+    -> calibrated suite -> held-out backtest -> reports
 ```
 
 `runner.py` is the only entry point. It wires the components; no component imports another component's internals.
@@ -78,13 +67,14 @@ reports/backtest.{json,md}
 ## Verified
 
 - The extension intercepts and forwards IQ Option WebSocket frames.
-- The receiver validates the envelope, stamps `received_at`, and can persist every accepted tick as JSONL.
-- CSV, JSONL, and Parquet ingestion enforce the tick contract; exact duplicates are dropped; ordering is restored.
+- The receiver validates the envelope and stamps `received_at`; `serve` sends accepted events to the stream store.
+- Stream events preserve repeated prices and sequence order; late events are rejected and counted.
+- CSV, JSONL, and Parquet file ingestion enforce the batch tick contract and stably sort by timestamp and sequence.
 - Snapshot sampling rejects missing history, gaps, sparse bars, and missing entry ticks with specific counters.
 - The 16 core features are computed from one snapshot with no lookahead.
 - Training produces one calibrated model per horizon, or records why a horizon was skipped.
-- The backtest replays only held-out probabilities, enforces the open-trade limit, and writes JSON and Markdown reports.
-- 117 unit tests pass across config, store, timeframes, profile, sampler, features, labels, models, router, execution, reports, backtest, receiver, and the documentation checker.
+- The backtest replays only held-out probabilities and writes JSON and Markdown reports.
+- Stream, runtime, artifact, replay, and offline behavior have focused unit tests.
 
 ## Not Verified
 
@@ -103,19 +93,20 @@ reports/backtest.{json,md}
 | Layer | Status | Notes |
 |-------|--------|-------|
 | Browser tick capture | Current | Manually observed live |
-| Durable tick capture | Current | JSONL, daily rotation, append-only |
-| Tick store and replay | Current | Parquet, deterministic rebuild |
-| Snapshot sampling | Current | Batch only, one instrument |
-| Feature engine | Current | Stateless, snapshot-based |
+| Durable tick capture | Current | Event/candle Parquet parts; legacy JSONL captures remain loadable |
+| Tick store and replay | Current | Batch store plus streaming replay from hourly parts |
+| Snapshot sampling | Current | Candle-close cadence, offline and runtime, one instrument |
+| Feature engine | Current | Stateless `core16-v2` / `amt-v4` |
 | Labels and payout math | Current | Ties and missing exits explicit |
 | Model suite | Current | Four horizons, calibrated, walk-forward |
 | Signal router | Current | Deterministic EV hurdle, tie-break, and reason codes; not ML-based |
-| Runtime model loading | Not implemented | Current `suite.pkl` is used by offline train/backtest commands; `.joblib` runtime loading is planned |
+| Runtime model loading | Current | Manifest-bearing `.joblib`, compatibility checks, fail-closed startup |
 | Learned signal selection | Planning | Evaluate learned direction/horizon/no-trade selection against the current EV router |
 | Paper backtest | Current | Held-out slice only |
-| Live features and signals | Not implemented | `serve` captures only |
+| Runtime inference and paper decisions | Current | Candle-close feature loop and decision journal; paper only |
+| Learned signal selection | Planning | Evaluate learned direction/horizon/no-trade selection against deterministic router |
 | Demo/live execution | Not implemented | Mode names validated, then rejected |
-| Risk manager and kill switch | Not implemented | Fixed stake only |
+| Risk manager and kill switch | Not implemented | Runtime has one-open-trade, cooldown, and daily loss gates, not a complete risk system |
 | Multi-instrument | Not implemented | Filtered to one `active_id` |
 | Monitoring and alerts | Not implemented | Console logs and reports only |
 
@@ -125,12 +116,14 @@ reports/backtest.{json,md}
 
 | Path | Purpose |
 |------|---------|
-| `runner.py` | Entry point: `serve`, `build`, `train`, `backtest`, `diagnose` |
+| `runner.py` | Entry point: `serve`, `build`, `train`, `backtest`, `model-check`, `replay`, `diagnose`, `docs-check` |
 | `components/receiver.py` | WebSocket capture, receipt stamping, tick sink |
 | `engine/config.py` | TOML schema, validation, version constants, config hash |
-| `engine/store.py` | Tick ingestion, ordering, dedupe, point-in-time lookup |
+| `engine/store.py` | Batch tick ingestion, sequence ordering, duplicate reporting, point-in-time lookup |
+| `engine/stream/` | Streaming event/candle storage and state recovery |
+| `engine/runtime.py` | Candle-close inference, deterministic gates, paper journals |
 | `engine/sampler.py` | Snapshot gate, continuity, entry/exit timing |
-| `engine/features.py` | `core16-v1` vector and `amt-v3` diagnostics |
+| `engine/features.py` | `core16-v2` vector and `amt-v4` diagnostics |
 | `engine/domain/` | Candles, profile, labels |
 | `engine/models.py` | Calibration, walk-forward, model suite |
 | `engine/router.py` | EV hurdle and proposal selection |
@@ -159,4 +152,4 @@ reports/backtest.{json,md}
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

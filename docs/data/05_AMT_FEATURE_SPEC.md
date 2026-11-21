@@ -2,7 +2,7 @@
 
 Status: Current
 
-> This document defines the exact AMT feature families and formulas. `engine/features.py` implements `amt-v3`: one row per validated snapshot, with a 16-feature `core16-v1` model vector and the remaining columns kept as diagnostics. Every feature is computable causally from one snapshot time.
+> This document defines the exact AMT feature families and formulas. `engine/features.py` implements `amt-v4`: one row per validated candle-close snapshot, with a 16-feature `core16-v2` model vector and the remaining columns kept as diagnostics. Every feature is computable causally from completed candles.
 
 ---
 
@@ -10,7 +10,7 @@ Status: Current
 
 | Symbol | Meaning |
 |--------|---------|
-| `P_t` | Price at the snapshot time `t` — the last tick at or before `t` |
+| `P_t` | Close price of the last completed candle at decision time `t` |
 | `k` | Number of completed 1-minute candles since capture start |
 | `POC` | Point of Control from the macro profile |
 | `VAH` | Value Area High |
@@ -27,11 +27,11 @@ Ticks carry one timestamp: the receiver's local receipt time, stored as ISO 8601
 |--------|------------|------|
 | Macro | Last `macro_candles` completed candles (default 7) | Profile, `sigma_7`, slow activity |
 | Fast | Last `fast_candles` completed candles (default 3) | Recent activity |
-| Forming | Ticks in the current, incomplete candle | Current price, immediate activity |
+| Last | Most recent completed candle | Last-candle activity and close price |
 
-The forming candle **never** enters the profile. It contributes current price, tick rate, price speed, and range only.
+Only completed candles enter feature calculations. The forming candle is excluded entirely.
 
-For each layer `L`, with `duration_L` measured from the start of the oldest candle in the layer to the start of the forming candle:
+For macro and fast layers, `duration_L` spans the completed minutes covered by the layer. The last-candle layer uses one `interval_seconds`.
 
 ```text
 tick_rate_L     = ticks_L / duration_L
@@ -39,12 +39,6 @@ price_change_L  = last_price_L - first_price_L
 price_speed_L   = abs(price_change_L) / duration_L
 range_L         = max_price_L - min_price_L
 range_speed_L   = range_L / duration_L
-```
-
-For the forming layer:
-
-```text
-duration_forming = max(t - start_of_current_candle, 1 second)
 ```
 
 ---
@@ -138,40 +132,40 @@ The global ratio of single-tick bins to all bins is a diagnostic only. It is not
 
 ## Feature Family 3 — Layer Activity
 
-Every layer produces the same five metrics. Ratios compare fast to macro and forming to fast.
+Every layer produces the same five metrics. Ratios compare fast to macro and last candle to fast.
 
 | Feature | Definition |
 |---------|------------|
 | `tick_rate_7` | Ticks per second over the macro window |
 | `tick_rate_3` | Ticks per second over the fast window |
-| `tick_rate_forming` | Ticks per second in the forming candle |
+| `tick_rate_last` | Ticks per second in the last completed candle |
 | `price_change_7` | Last minus first price in the macro window |
 | `price_change_3` | Last minus first price in the fast window |
-| `price_change_forming` | Current price minus first price in the forming candle |
+| `price_change_last` | Last price minus first price in the last completed candle |
 | `price_speed_7` | `abs(price_change_7) / duration_7` |
 | `price_speed_3` | `abs(price_change_3) / duration_3` |
-| `price_speed_forming` | `abs(price_change_forming) / duration_forming` |
+| `price_speed_last` | `abs(price_change_last) / interval_seconds` |
 | `range_7` | High minus low in the macro window |
 | `range_3` | High minus low in the fast window |
-| `range_forming` | High minus low in the forming candle |
+| `range_last` | High minus low in the last completed candle |
 | `range_speed_7` | `range_7 / duration_7` |
 | `range_speed_3` | `range_3 / duration_3` |
-| `range_speed_forming` | `range_forming / duration_forming` |
+| `range_speed_last` | `range_last / interval_seconds` |
 
 Ratios:
 
 ```text
 tick_rate_3_7          = tick_rate_3 / tick_rate_7
-tick_rate_forming_3    = tick_rate_forming / tick_rate_3
+tick_rate_last_3       = tick_rate_last / tick_rate_3
 price_speed_3_7        = price_speed_3 / price_speed_7
-price_speed_forming_3  = price_speed_forming / price_speed_3
+price_speed_last_3     = price_speed_last / price_speed_3
 range_3_7              = range_3 / range_7
-range_forming_3        = range_forming / range_3
+range_last_3           = range_last / range_3
 ```
 
 A ratio is null when its denominator is null, zero, or negative. Ratios are not clipped.
 
-There are no fixed 5-second, 30-second, or 300-second velocity windows. Activity is always compared across the macro, fast, and forming layers.
+There are no fixed 5-second, 30-second, or 300-second velocity windows. Activity is compared across macro, fast, and last-candle layers.
 
 ---
 
@@ -196,8 +190,9 @@ Time features use the tick's own local timestamp. They do not convert to a sessi
 | `timestamp` | string | Snapshot time, ISO 8601 with offset |
 | `active_id` | int | Instrument key |
 | `price` | float | `P_t` |
-| `feature_version` | string | `amt-v3` |
-| `core_feature_version` | string | `core16-v1` |
+| `feature_version` | string | `amt-v4` |
+| `core_feature_version` | string | `core16-v2` |
+| `decision_version` | string | `candle-close-v1` |
 | `poc` | float or null | POC bin midpoint |
 | `vah` | float or null | Upper edge of the highest included bin |
 | `val` | float or null | Lower edge of the lowest included bin |
@@ -215,8 +210,8 @@ Time features use the tick's own local timestamp. They do not convert to a sessi
 | `excess_asymmetry` | float or null | `excess_high - excess_low` |
 | `tail_length_high` | float or null | Bins above VAH |
 | `tail_length_low` | float or null | Bins below VAL |
-| all `*_7`, `*_3`, `*_forming` | float or null | Layer activity metrics |
-| all `*_3_7`, `*_forming_3` | float or null | Layer ratios |
+| all `*_7`, `*_3`, `*_last` | float or null | Layer activity metrics |
+| all `*_3_7`, `*_last_3` | float or null | Layer ratios |
 | `time_sin` | float | Cyclical time encoding |
 | `time_cos` | float | Cyclical time encoding |
 | `day_of_week` | int | Local timestamp |
@@ -230,10 +225,9 @@ Time features use the tick's own local timestamp. They do not convert to a sessi
 
 ## Causal Rules
 
-1. A feature snapshot at time `t` may use only ticks with timestamp `<= t`.
-2. The sampler truncates the forming bar at `t` before any feature is computed.
-3. The profile and `sigma_7` use completed candles only.
-4. The forming candle contributes only `P_t` and forming-layer activity.
+1. A feature snapshot at time `t` may use only events in the completed-candle window.
+2. The sampler includes the decision candle and excludes the forming candle.
+3. The profile, `sigma_7`, and activity layers use completed candles only.
 5. No feature may use any tick after `t`.
 6. Feature computation for training and inference must share the same code path and version.
 
@@ -260,8 +254,9 @@ Two version strings matter:
 
 | Version | Scope |
 |---------|-------|
-| `amt-v3` | The full snapshot table, including diagnostics |
-| `core16-v1` | The sixteen model inputs |
+| `amt-v4` | The full snapshot table, including diagnostics |
+| `core16-v2` | The sixteen model inputs |
+| `candle-close-v1` | Decision cadence |
 
 A new version is required when:
 
@@ -269,7 +264,7 @@ A new version is required when:
 - Bin size, `sigma_7`, or value-area expansion changes.
 - A feature is added, removed, or redefined.
 - The definition of a layer or ratio changes.
-- The snapshot offset, entry delay, or tolerance changes.
+- The decision cadence, entry delay, or tolerance changes.
 
 `amt-v1` was the pre-implementation draft with fixed velocity windows and candle-close `sigma_t`. `amt-v2` was the previous tick-level table. Both are superseded.
 
@@ -306,4 +301,4 @@ The tick-level diagnostic table (`build_diagnostic_table`) still exists for rese
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

@@ -21,7 +21,8 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(len(CORE_FEATURES), 16)
         self.assertEqual(len(set(CORE_FEATURES)), 16)
         self.assertEqual(CORE_FEATURES[0], "z_poc")
-        self.assertEqual(CORE_FEATURES[-1], "price_change_forming")
+        self.assertEqual(CORE_FEATURES[-1], "price_change_last")
+        self.assertFalse(any("forming" in name for name in CORE_FEATURES))
 
     def test_snapshot_features_are_complete_with_full_history(self) -> None:
         config = make_config()
@@ -97,8 +98,9 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual([row["snapshot_id"] for row in rows], list(range(len(found))))
         for name in CORE_FEATURES:
             self.assertIn(name, rows[0])
-        self.assertEqual(rows[0]["feature_version"], "amt-v3")
-        self.assertEqual(rows[0]["core_feature_version"], "core16-v1")
+        self.assertEqual(rows[0]["feature_version"], "amt-v4")
+        self.assertEqual(rows[0]["core_feature_version"], "core16-v2")
+        self.assertEqual(rows[0]["decision_version"], "candle-close-v1")
 
     def test_diagnostic_table_has_one_row_per_tick(self) -> None:
         config = make_config()

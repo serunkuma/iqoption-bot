@@ -2,7 +2,7 @@
 
 Status: Current
 
-> Six components run today: capture, store, sampler, features and labels, model suite, and router plus paper execution. Each has one responsibility and a plain-data boundary.
+> Components cover capture, batch and streaming stores, candle-close sampling/features, model artifacts, routing, replay, and paper execution. Each has one responsibility and a plain-data boundary.
 
 ---
 
@@ -13,18 +13,20 @@ Status: Current
 | Page WebSocket intercept | `chrome-extension/inject.js` | Patch `window.WebSocket`, observe messages, filter `candle-generated`, post the raw payload to the isolated world | none |
 | Local forwarder | `chrome-extension/content.js` | Validate page messages, connect to `ws://localhost:8765`, reconnect every 2s, queue up to 500 messages | interceptor |
 | Tick capture | `components/receiver.py` | Validate the envelope, stamp `received_at`, buffer 500 raw messages per `active_id`, call the tick sink | forwarder |
-| Tick sink | `runner.py` (`JsonlTickSink`) | Append accepted ticks to a daily JSONL file | capture |
-| Tick store | `engine/store.py` | Enforce the tick contract, order, deduplicate, expose point-in-time price lookups | capture output |
-| Snapshot sampler | `engine/sampler.py` | Verify continuity, freeze the causal feature slice, attach delayed entry and horizon exits | store, config |
+| Stream store | `engine/stream/` | Assign sequences, build candles, preserve events, reject late events, persist parts/state | receiver payload, config |
+| Batch tick store | `engine/store.py` | Enforce the tick contract, stable-sort by timestamp/sequence, expose point-in-time lookups | file input |
+| Snapshot sampler | `engine/sampler.py` | Build one candle-close snapshot per eligible minute and attach delayed entry/horizon exits | batch store, config |
 | Domain primitives | `engine/domain/` | Minute buckets, TPO profile, and labels | config |
-| Feature engine | `engine/features.py` | Stateless `core16-v1` vector plus `amt-v3` diagnostics | sampler snapshot, config |
+| Feature engine | `engine/features.py` | Stateless `core16-v2` vector plus `amt-v4` diagnostics | completed-candle window, config |
 | Dataset builder | `engine/build.py` | Join features to labels, write Parquet artifacts | sampler, features, labels |
 | Model suite | `engine/models.py` | Walk-forward training, calibration, held-out evaluation table | dataset |
 | Router | `engine/router.py` | EV hurdle, direction and horizon selection, reason codes | probabilities, config |
 | Paper broker | `engine/execution.py` | Open, hold, and resolve paper trades under a one-open-trade limit | proposal, snapshot, config |
 | Backtest | `engine/backtest.py` | Replay held-out probabilities through router and broker | suite, dataset, config |
+| Runtime | `engine/runtime.py` | Candle-close inference, paper gates, and decision/trade journaling | stream store, model suite |
+| Replay | `engine/replay.py` | Rebuild candles from event parts and compare candles/features | event parts, optional dataset |
 | Reports | `engine/reports.py` | Calibration, reliability, importance, JSON/Markdown bundle | suite, trades |
-| Entry point | `runner.py` | Lifecycle and wiring for `serve`, `build`, `train`, `backtest`, `diagnose` | all of the above |
+| Entry point | `runner.py` | Lifecycle and wiring for `serve`, `build`, `train`, `backtest`, `model-check`, `replay`, `diagnose`, `docs-check` | all of the above |
 | Asset-name map | `asset_names.json` | Map `active_id` to a display name for logs | none |
 
 ---
@@ -34,14 +36,17 @@ Status: Current
 ```text
 browser frame
   -> receiver.accept_frame          validate, stamp received_at
-  -> JsonlTickSink                  data/raw/ticks-<date>.jsonl
-  -> TickStore                      ordered, deduplicated ticks
-  -> build_snapshots                gated evaluation points
-  -> compute_features               core16-v1 + diagnostics
-  -> snapshot_label_rows            long-format labels
+  -> StreamStore                    sequence, events, candles, persisted state
+  -> RuntimeEngine                  candle-close features, validated .joblib inference
+  -> EV router                      explicit proposal / abstention
+  -> PaperBroker + journals         no broker order path
+
+offline file
+  -> TickStore                      stable timestamp/sequence order, duplicates preserved
+  -> build_snapshots                candle-close snapshots and labels
+  -> compute_features               core16-v2 + amt-v4 diagnostics
   -> dataset.parquet                joined rows
-  -> train_suite                    four calibrated models + evaluation table
-  -> run_backtest                   router + paper broker
+  -> train_suite / run_backtest     calibrated models / held-out paper replay
   -> reports                        JSON + Markdown
 ```
 
@@ -63,7 +68,8 @@ browser frame
 | Component | Test file |
 |-----------|-----------|
 | Config | `tests/test_config.py` |
-| Store | `tests/test_store.py` |
+| Batch store | `tests/test_store.py` |
+| Streaming store | `tests/test_stream.py` |
 | Timeframes | `tests/test_timeframes.py` |
 | Profile | `tests/test_profile.py` |
 | Sampler | `tests/test_sampler.py` |
@@ -73,6 +79,8 @@ browser frame
 | Router | `tests/test_router.py` |
 | Execution | `tests/test_execution.py` |
 | Backtest | `tests/test_backtest.py` |
+| Runtime | `tests/test_runtime.py` |
+| Replay | `tests/test_replay.py` |
 | Reports | `tests/test_reports.py` |
 | Receiver | `tests/test_receiver.py` |
 | Documentation checker | `tests/test_docs.py` |
@@ -98,9 +106,8 @@ Invoked as `runner.py docs-check`. It reads markdown only and imports nothing fr
 
 | Component | Responsibility | Blocker |
 |-----------|----------------|---------|
-| Live feature service | Produce snapshots and vectors from the running stream | Live sampling does not exist |
-| Live signal loop | Route live probabilities and log proposals | Needs the live feature service |
-| Risk manager | Daily loss limit, consecutive-loss limit, stake sizing, kill switch | Not designed in code |
+| Learned selector | Select direction/horizon/no-trade from a defined ML target | Target and scope not decided |
+| Complete risk manager | Additional exposure/loss policies and kill switch | Runtime has only basic paper gates |
 | Demo/live adapter | Place and reconcile real orders | Requires validation gate and risk manager |
 | Session and gap tracker | Record reconnects and missing periods explicitly | Gaps are currently inferred |
 | Monitoring | Metrics, alerts, drift detection | Reports are offline only |
@@ -118,4 +125,4 @@ These are not implemented and must not be described as working.
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

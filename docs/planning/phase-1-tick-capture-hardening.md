@@ -4,7 +4,7 @@ Status: Current
 
 > **Objective:** Turn the live tick-capture proof of concept into a trustworthy ingestion layer with a verified contract, persistence, quality metrics, and configuration.
 
-> **State:** Persistence, dedupe, ordering, parsing validation, and engine configuration are implemented. Frame semantics and receiver-level quality counters remain open.
+> **State:** The stream store persists sequenced events and finalized candles in hourly Parquet parts, with state recovery and replay checks. Frame semantics and real-feed quality remain open. The earlier daily JSONL design below is historical; current stream behavior is specified in [Streaming Runtime and Store](../system/16_STREAMING_RUNTIME_AND_STORE.md).
 
 ---
 
@@ -12,7 +12,7 @@ Status: Current
 
 - Verify what one intercepted frame actually represents.
 - Record receipt time and event time.
-- Persist raw frames.
+- Persist accepted event records and finalized candles.
 - Add data-quality checks and counters.
 - Replace hard-coded constants with configuration.
 - Expand tests.
@@ -36,18 +36,19 @@ Out of scope: candle aggregation, AMT features, ML, execution.
 
 ### Persistence
 
-- [x] Add append-only JSONL capture with daily rotation.
-- [x] Record `received_at`, `active_id`, `price`, and the raw payload.
+- [x] Persist sequenced events in hourly Parquet parts.
+- [x] Record `received_at`, `active_id`, `price`, sequence, and the raw payload.
+- [x] Persist finalized candles and recover stream state.
 - [ ] Record `session_id` and `connection_id`.
-- [x] Add a replay path: `build --input <jsonl>`.
+- [x] Add file-based build/diagnose and persisted-stream candle replay.
 - [ ] Add retention and disk-usage policy.
 
 ### Data quality
 
-- [x] Count duplicates and out-of-order rows at build time.
+- [x] Count duplicate timestamp/price pairs and out-of-order rows in file diagnostics; preserve events.
 - [x] Reject naive timestamps, non-numeric prices, and non-positive prices.
 - [ ] Count received, accepted, rejected, malformed, and late frames at the receiver.
-- [x] Add duplicate detection.
+- [x] Add duplicate counting without deduplication.
 - [x] Add out-of-order detection.
 - [ ] Add gap and reconnect records.
 - [ ] Add per-`active_id` message-rate tracking.
@@ -81,9 +82,9 @@ Out of scope: candle aggregation, AMT features, ML, execution.
 ## Deliverables
 
 - Verified tick contract (partial).
-- JSONL raw tick log (done).
-- Replay path via `build --input` (done).
-- Quality counters (build-time done, capture-time open).
+- Hourly event/candle Parquet parts with state recovery (implemented).
+- File-based offline build plus streaming-event candle replay (implemented).
+- Duplicate/file diagnostics and streaming gap/late-event counters are implemented; richer receiver-level metrics remain open.
 - `config/default.toml` and validation (done).
 - Expanded tests (done).
 - Updated docs (done).
@@ -94,12 +95,12 @@ Out of scope: candle aggregation, AMT features, ML, execution.
 
 - [ ] The meaning of one frame is documented and agreed.
 - [ ] `at` semantics are documented.
-- [x] A receiver restart does not lose previously captured ticks.
-- [ ] A JSONL capture can be replayed to produce the same accepted/rejected counts.
+- [x] A stream-store restart recovers persisted sequence/state; rolling features warm up again.
+- [x] Persisted events can be replayed to compare rebuilt and recorded candles.
 - [ ] Duplicate, gap, and late-tick counts are visible at capture time.
 - [ ] Configuration changes do not require code edits.
 - [x] Tests cover malformed and edge-case frames.
-- [x] Documentation no longer implies candles already exist.
+- [x] Documentation distinguishes persisted streaming candles from offline rebuilt snapshots.
 
 ---
 
@@ -119,4 +120,4 @@ Out of scope: candle aggregation, AMT features, ML, execution.
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

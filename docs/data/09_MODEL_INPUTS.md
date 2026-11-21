@@ -2,7 +2,7 @@
 
 Status: Current
 
-> The models consume sixteen features, versioned `core16-v1`, computed by one stateless function from one validated snapshot. The wider `amt-v3` table is stored for diagnostics and research, not fed to the models.
+> The models consume sixteen features, versioned `core16-v2`, computed by one stateless function from one candle-close snapshot. The wider `amt-v4` table is stored for diagnostics and research, not fed to the models.
 
 ---
 
@@ -14,14 +14,14 @@ compute_features(snapshot: Snapshot, config: Config) -> FeatureVector
 
 - No state, no I/O, no clock reads.
 - The snapshot is the only input; the config supplies parameters.
-- The same function produces training rows and (when live inference exists) online vectors.
+- The same function produces training rows and runtime inference vectors.
 - Missing values are `None`, stored as `NaN`; nothing is imputed.
 
-Because the function is pure, an offline rebuild and a future live path cannot drift apart. Any change to feature definitions requires a new `CORE_FEATURE_VERSION`.
+Because the function is pure, offline rebuilds and runtime inference share the same calculation. Any change to feature definitions requires a new `CORE_FEATURE_VERSION`.
 
 ---
 
-## Core Vector — `core16-v1`
+## Core Vector — `core16-v2`
 
 Order is frozen; the model stores the names and validates the order.
 
@@ -38,17 +38,17 @@ Order is frozen; the model stores the names and validates the order.
 | 9 | `excess_low` | Excess | Bottom-tail single-print ratio |
 | 10 | `excess_asymmetry` | Excess | `excess_high - excess_low` |
 | 11 | `tick_rate_3_7` | Activity ratio | `tick_rate_3 / tick_rate_7` |
-| 12 | `tick_rate_forming_3` | Activity ratio | `tick_rate_forming / tick_rate_3` |
+| 12 | `tick_rate_last_3` | Activity ratio | `tick_rate_last / tick_rate_3` |
 | 13 | `price_speed_3_7` | Activity ratio | `price_speed_3 / price_speed_7` |
-| 14 | `price_speed_forming_3` | Activity ratio | `price_speed_forming / price_speed_3` |
-| 15 | `range_forming_3` | Activity ratio | `range_forming / range_3` |
-| 16 | `price_change_forming` | Forming | `last - first` price in the forming bar |
+| 14 | `price_speed_last_3` | Activity ratio | `price_speed_last / price_speed_3` |
+| 15 | `range_last_3` | Activity ratio | `range_last / range_3` |
+| 16 | `price_change_last` | Last candle | `last - first` price in the last completed candle |
 
 Notes:
 
 - `poc_position` is in `[0, 1]` when the value area is non-degenerate.
 - `edge_proximity` is negative outside the value area, which is intentional and informative.
-- `price_change_forming` is signed; the activity ratios are unsigned.
+- `price_change_last` is signed; the activity ratios are unsigned.
 - Ratios are `None` when the denominator is `None`, zero, or negative. They are not clipped.
 
 ### Why These Sixteen
@@ -59,7 +59,7 @@ Raw levels (`poc`, `vah`, `val`) and raw rates are deliberately excluded: they e
 
 ---
 
-## Diagnostic Table — `amt-v3`
+## Diagnostic Table — `amt-v4`
 
 Every feature row also carries diagnostics. They are written to `data/features.parquet` and `data/dataset.parquet`, and they are useful for debugging and research, but they are not model inputs.
 
@@ -67,7 +67,7 @@ Every feature row also carries diagnostics. They are written to `data/features.p
 |-------|---------|
 | Levels | `poc`, `vah`, `val` |
 | Profile | `profile_ticks`, `sigma_7`, `window_bars`, `tail_length_high`, `tail_length_low` |
-| Layer activity | `tick_rate_7`, `tick_rate_3`, `tick_rate_forming`, `price_change_7`, `price_change_3`, `price_speed_7`, `price_speed_3`, `price_speed_forming`, `range_7`, `range_3`, `range_forming`, `range_speed_7`, `range_speed_3`, `range_speed_forming`, `range_3_7` |
+| Layer activity | `tick_rate_7`, `tick_rate_3`, `tick_rate_last`, `price_change_7`, `price_change_3`, `price_change_last`, `price_speed_7`, `price_speed_3`, `price_speed_last`, `range_7`, `range_3`, `range_last`, `range_speed_7`, `range_speed_3`, `range_speed_last`, `range_3_7` |
 | Context | `time_sin`, `time_cos`, `day_of_week`, `is_weekend` |
 | Quality | `profile_missing`, `volatility_missing`, `insufficient_ticks`, `gap_in_window` |
 
@@ -81,7 +81,7 @@ The tick-level diagnostic table (`build_diagnostic_table`) also exists for resea
 
 ### Layer Statistics
 
-For each layer — macro (all completed bars), fast (last `fast_candles` completed bars), forming (truncated forming bar):
+For each layer — macro (all completed bars), fast (last `fast_candles` completed bars), and last (most recent completed candle):
 
 ```text
 tick_rate    = tick_count / duration_seconds
@@ -91,7 +91,7 @@ range        = max_price - min_price
 range_speed  = range / duration_seconds
 ```
 
-Durations are measured to the **start of the forming minute** for completed layers, and to the snapshot time for the forming layer (minimum 1 second).
+Durations for the macro and fast layers span their covered completed minutes. The last-candle layer uses one full `interval_seconds`.
 
 ### Profile
 
@@ -123,7 +123,7 @@ It requires at least `volatility_min_changes` differences (default 10), must be 
 | Profile is `None` | All profile-dependent core features `None` |
 | `sigma_7` is `None` | All `z_*`, `va_width_norm`, `poc_position`, `edge_proximity` `None` |
 | Zero denominator | That ratio `None` |
-| Forming bar has one tick | Speeds still defined; `price_change_forming = 0` |
+| Last completed candle has one tick | Speeds remain defined; `price_change_last = 0` |
 
 LightGBM and the sklearn fallback both accept `NaN` natively, so missing values do not require imputation. The row stays in training with its missing pattern intact, which is the honest representation.
 
@@ -133,14 +133,15 @@ LightGBM and the sklearn fallback both accept `NaN` natively, so missing values 
 
 | Version | Scope |
 |---------|-------|
-| `amt-v3` | Full diagnostic table, one row per snapshot |
-| `core16-v1` | The sixteen model inputs |
+| `amt-v4` | Full diagnostic table, one row per snapshot |
+| `core16-v2` | The sixteen model inputs |
 | `snapshot-horizon-v1` | Labels |
 | `1m-clock-v1` | Minute bucketing |
+| `candle-close-v1` | Decision cadence |
 
 `amt-v2` was the previous tick-level table with a different column set. It is superseded and must not be referenced as current.
 
-A version bump is required when a feature is added, removed, or redefined, or when the window, bin size, volatility, or value-area definition changes. The version strings live in `engine/config.py` and are recorded on every row and every suite.
+A version bump is required when a feature is added, removed, or redefined, or when the window, decision cadence, bin size, volatility, or value-area definition changes. The version strings live in `engine/config.py` and are recorded on every row and every suite.
 
 ---
 
@@ -153,4 +154,4 @@ A version bump is required when a feature is added, removed, or redefined, or wh
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

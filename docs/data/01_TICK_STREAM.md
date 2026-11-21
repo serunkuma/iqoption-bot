@@ -79,7 +79,7 @@ The receiver recognises the identity fields above when formatting logs. They are
 5. Copy `msg` into a dictionary and stamp `received_at` if absent.
 6. Append the dictionary to `history_by_active_id[active_id]`.
 7. Call `process_tick`, which logs OHLCV values and the current buffer length.
-8. Call the optional tick sink, which `runner.py serve` wires to the JSONL writer.
+8. Call the optional tick sink, which `runner.py serve` wires to `StreamStore`.
 
 ### Buffer Semantics
 
@@ -123,18 +123,18 @@ The project uses **one timestamp**: the receiver's local receipt time.
 - `msg` must be an object.
 - `active_id` must be present.
 - Every accepted frame is stamped with `received_at`.
-- Accepted ticks can be appended to a daily JSONL capture.
+- Accepted ticks are assigned a stream sequence and persisted in hourly-partitioned Parquet event files by `StreamStore`.
+- The stream store preserves repeated prices and equal-timestamp events; it rejects late events after candle finalization and counts them.
+- Batch `TickStore` loading preserves duplicates and uses stable timestamp/sequence ordering.
 - Asset-name files must map string keys to non-empty string values.
 - The tick store rejects naive timestamps, non-numeric prices, non-positive prices, and `active_id` mismatches.
-- Exact `(timestamp, price)` duplicates are dropped when the store is built.
-- Out-of-order rows are counted and sorted.
+- Batch input timestamp inversions are counted and rows are stably sorted by timestamp and sequence.
 
-### Planned
+### Not Implemented
 
 | Rule | Purpose |
 |------|---------|
 | Reject non-numeric `close` at the receiver | Fail earlier than the build |
-| Detect duplicate frames at capture time | Avoid writing duplicates to disk |
 | Detect gaps and reconnects | Mark periods with missing data explicitly |
 | Track message rate per `active_id` | Detect stale or stalled instruments |
 | Flag unknown/renamed message types | Detect feed schema drift |
@@ -151,30 +151,30 @@ Invalid frames must be counted and sampled in logs, not silently discarded. The 
 - `frames_stale`
 - `frames_duplicate`
 
+The current stream store exposes event, candle-close, gap-minute, late-reject, invalid, instrument-reject, flush, and write-failure counters. It does not expose all of the receiver-level counters above.
+
 ---
 
 ## Persistence
 
-`runner.py serve` persists accepted ticks as JSONL, one file per UTC day under `data/raw/`:
+`runner.py serve` persists accepted events in Parquet parts, partitioned by UTC receipt date/hour under `data/stream/events/`, and finalized candles under `data/stream/candles/`. It also writes `state.json` for sequence/bucket recovery and the forming candle. Paper mode writes decision and trade journals under the stream root.
 
-```json
-{"received_at":"2026-11-18T13:00:00.123+01:00","active_id":42,"price":1.25,"payload":{"close":1.25,"at":123}}
-```
+The event part contains a `raw_json` column with the original receiver payload. The payload `at` value stays in that payload and is never promoted to a timestamp column. Exact part schemas and recovery behavior are documented in [Streaming Runtime and Store](../system/16_STREAMING_RUNTIME_AND_STORE.md).
 
-JSONL is chosen first because it is append-only, easy to inspect, and replayable. `build` reads it into the Parquet tick store. The payload `at` value stays inside `payload` and is never promoted to a timestamp column.
+`build` continues to read existing `.csv`, `.jsonl`, and `.parquet` files. It does not currently load the stream directory directly.
 
-Passing `--raw-dir ''` disables persistence for a capture-only session.
+Use `runner.py serve --capture-only` to store events/candles without model inference. This is still persistent capture; there is no `--raw-dir ''` option.
 
-### Duplicate Rule
+### Duplicate Policy
 
-The tick store drops exact `(timestamp, price)` duplicates before snapshots are built. This prevents repeated frames from inflating tick density. Near-duplicates and genuinely repeated prices are still an open question.
+Accepted stream events are never deduplicated. Identical timestamps and prices remain distinct observations and receive distinct sequence numbers. Batch ingestion follows the same duplicate-preservation policy. The `diagnose` command reports exact duplicate `(timestamp, price)` counts so their effect on tick density can be inspected.
 
 ---
 
 ## Open Questions
 
 - Is the intercepted frame a raw tick, a partial-candle update, or a completed-candle event?
-- Does the feed send repeated identical prices, and should non-identical repeats count as TPO ticks?
+- Does the feed send repeated identical frames, and what do those repeats mean for tick density?
 - Are there other message types that carry price updates and should be captured?
 - What is the expected message rate per `active_id` during an active session?
 - How should multi-instrument capture partition storage and features if it is added later?

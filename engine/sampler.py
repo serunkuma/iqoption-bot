@@ -1,11 +1,13 @@
-"""Snapshot gate: the canonical sampling and continuity component.
+"""Candle-close snapshot gate.
 
-A snapshot is an evaluation point inside a forming minute. The gate verifies
-that the seven preceding 1-minute bars exist and are contiguous, captures a
-causality-safe feature slice, and attaches a delayed entry price plus the four
+A snapshot is the state at a completed one-minute candle. The gate verifies that
+the seven most recent bars exist and are contiguous, captures the causal feature
+slice (the closed bars only), and attaches a delayed entry price plus the four
 future expiry outcomes.
 
-Nothing downstream may evaluate a tick that the gate did not validate.
+There is exactly one snapshot per decision minute. The intra-minute offset mode
+was removed in the streaming redesign: decisions happen at candle close, not at
+``:30``.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from .config import Config
+from .config import DECISION_VERSION, Config
 from .domain.labels import classify_direction
 from .store import TickStore
 
@@ -41,6 +43,14 @@ class BarSlice:
     def low(self) -> float:
         return min(self.prices)
 
+    @property
+    def open(self) -> float:
+        return self.prices[0]
+
+    @property
+    def close(self) -> float:
+        return self.prices[-1]
+
 
 @dataclass(frozen=True)
 class HorizonOutcome:
@@ -53,14 +63,12 @@ class HorizonOutcome:
 
 @dataclass(frozen=True)
 class Snapshot:
-    """One validated evaluation point."""
+    """One validated candle-close decision point."""
 
     snapshot_id: int
     active_id: int
     snapshot_time: datetime
-    forming_start: datetime
     completed_bars: tuple[BarSlice, ...]
-    forming_bar: BarSlice
     price: float
     window_ticks: int
     entry_timestamp: datetime | None
@@ -68,13 +76,14 @@ class Snapshot:
     entry_delay_seconds: float | None
     outcomes: dict[int, HorizonOutcome] = field(default_factory=dict)
     utc_offset_seconds: int = 0
+    decision_version: str = DECISION_VERSION
 
     @property
     def contiguous(self) -> bool:
         if not self.completed_bars:
             return False
         keys = [bar.bucket_key for bar in self.completed_bars]
-        return keys[-1] - keys[0] + 1 == len(keys) and keys[-1] + 1 == self.forming_bar.bucket_key
+        return keys[-1] - keys[0] + 1 == len(keys)
 
 
 @dataclass
@@ -84,7 +93,6 @@ class SamplerReport:
     skipped_insufficient_history: int = 0
     skipped_gap: int = 0
     skipped_sparse_bar: int = 0
-    skipped_no_pre_offset_tick: int = 0
     skipped_no_entry_tick: int = 0
     snapshots_with_missing_exits: int = 0
 
@@ -95,7 +103,6 @@ class SamplerReport:
             "skipped_insufficient_history": self.skipped_insufficient_history,
             "skipped_gap": self.skipped_gap,
             "skipped_sparse_bar": self.skipped_sparse_bar,
-            "skipped_no_pre_offset_tick": self.skipped_no_pre_offset_tick,
             "skipped_no_entry_tick": self.skipped_no_entry_tick,
             "snapshots_with_missing_exits": self.snapshots_with_missing_exits,
         }
@@ -125,11 +132,8 @@ def _bar_slice(
     epochs: np.ndarray,
     prices: np.ndarray,
     interval_seconds: int,
-    limit: int | None = None,
 ) -> BarSlice:
     start, end = index_range
-    if limit is not None:
-        end = min(end, limit)
     return BarSlice(
         bucket_key=key,
         start_epoch=float(key * interval_seconds),
@@ -143,7 +147,7 @@ def _epoch_to_datetime(epoch: float) -> datetime:
 
 
 def build_snapshots(store: TickStore, config: Config) -> SamplerReport:
-    """Generate validated snapshots plus an exclusion report."""
+    """Generate one candle-close snapshot per valid minute plus an exclusion report."""
 
     report = SamplerReport()
     if store.is_empty:
@@ -151,7 +155,6 @@ def build_snapshots(store: TickStore, config: Config) -> SamplerReport:
 
     interval = config.candles.interval_seconds
     macro = config.context.macro_candles
-    offsets = tuple(config.snapshot.offsets_seconds)
     min_ticks = config.snapshot.min_ticks_per_bar
     entry_delay = config.snapshot.entry_delay_ms / 1000.0
     entry_tol = config.snapshot.entry_tolerance_seconds
@@ -178,17 +181,20 @@ def build_snapshots(store: TickStore, config: Config) -> SamplerReport:
     prices = frame["price"].to_numpy(dtype=np.float64)
     offsets_column = frame["utc_offset_seconds"].to_numpy(dtype=np.int64)
     buckets = _bucket_slices(epochs, prices, interval)
-    keys = sorted(buckets)
+    # A bucket is only complete once a strictly later bucket has started. The
+    # final bucket present in a capture is therefore always the forming candle
+    # and must never enter the feature window.
+    keys = sorted(buckets)[:-1] if len(buckets) > 1 else []
     report.candidate_minutes = len(keys)
 
     snapshot_id = 0
     for position, key in enumerate(keys):
-        if position < macro:
+        if position + 1 < macro:
             report.skipped_insufficient_history += 1
             continue
 
-        window_keys = keys[position - macro : position]
-        expected = list(range(key - macro, key))
+        window_keys = keys[position - macro + 1 : position + 1]
+        expected = list(range(key - macro + 1, key + 1))
         if window_keys != expected:
             report.skipped_gap += 1
             continue
@@ -196,97 +202,76 @@ def build_snapshots(store: TickStore, config: Config) -> SamplerReport:
             report.skipped_sparse_bar += 1
             continue
 
-        forming_range = buckets[key]
-        forming_start = float(key * interval)
+        completed = tuple(
+            _bar_slice(k, buckets[k], epochs, prices, interval) for k in window_keys
+        )
+        decision_epoch = float((key + 1) * interval)
+        price = completed[-1].close
+        window_ticks = sum(bar.tick_count for bar in completed)
 
-        for offset in offsets:
-            snapshot_epoch = forming_start + offset
-            # Features may only use ticks at or before the snapshot time.
-            limit = int(np.searchsorted(epochs, snapshot_epoch, side="right"))
-            if limit <= forming_range[0]:
-                report.skipped_no_pre_offset_tick += 1
-                continue
-            if limit > forming_range[1]:
-                limit = forming_range[1]
+        # Delayed entry: first tick at or after the candle close + delay.
+        entry_target = decision_epoch + entry_delay
+        entry_index = int(np.searchsorted(epochs, entry_target, side="left"))
+        entry_timestamp = None
+        entry_price = None
+        entry_delay_actual = None
+        if entry_index < epochs.size:
+            entry_epoch = float(epochs[entry_index])
+            if entry_epoch <= entry_target + entry_tol:
+                entry_timestamp = _epoch_to_datetime(entry_epoch)
+                entry_price = float(prices[entry_index])
+                entry_delay_actual = entry_epoch - decision_epoch
 
-            completed = tuple(
-                _bar_slice(k, buckets[k], epochs, prices, interval) for k in window_keys
+        if entry_timestamp is None or entry_price is None:
+            report.skipped_no_entry_tick += 1
+            continue
+
+        outcomes: dict[int, HorizonOutcome] = {}
+        missing_exit = False
+        for horizon in horizons:
+            target = float(entry_timestamp.timestamp()) + horizon
+            index = int(np.searchsorted(epochs, target, side="left"))
+            outcome = HorizonOutcome(
+                horizon_seconds=horizon,
+                exit_timestamp=None,
+                exit_price=None,
+                exit_delay_seconds=None,
+                label="missing",
             )
-            forming = _bar_slice(
-                key, forming_range, epochs, prices, interval, limit=limit
+            if index < epochs.size:
+                exit_epoch = float(epochs[index])
+                delay = exit_epoch - target
+                if delay <= exit_tol:
+                    exit_price = float(prices[index])
+                    outcome = HorizonOutcome(
+                        horizon_seconds=horizon,
+                        exit_timestamp=_epoch_to_datetime(exit_epoch),
+                        exit_price=exit_price,
+                        exit_delay_seconds=delay,
+                        label=classify_direction(entry_price, exit_price),
+                    )
+            if outcome.label == "missing":
+                missing_exit = True
+            outcomes[horizon] = outcome
+
+        if missing_exit:
+            report.snapshots_with_missing_exits += 1
+
+        report.snapshots.append(
+            Snapshot(
+                snapshot_id=snapshot_id,
+                active_id=active_id,
+                snapshot_time=_epoch_to_datetime(decision_epoch),
+                completed_bars=completed,
+                price=price,
+                window_ticks=window_ticks,
+                entry_timestamp=entry_timestamp,
+                entry_price=entry_price,
+                entry_delay_seconds=entry_delay_actual,
+                outcomes=outcomes,
+                utc_offset_seconds=int(offsets_column[buckets[key][0]]),
             )
-            if forming.tick_count == 0:
-                report.skipped_no_pre_offset_tick += 1
-                continue
-
-            price = forming.prices[-1]
-            window_ticks = sum(bar.tick_count for bar in completed)
-
-            # Delayed entry: first tick at or after T + delay.
-            entry_target = snapshot_epoch + entry_delay
-            entry_index = int(np.searchsorted(epochs, entry_target, side="left"))
-            entry_timestamp = None
-            entry_price = None
-            entry_delay_actual = None
-            if entry_index < epochs.size:
-                entry_epoch = float(epochs[entry_index])
-                if entry_epoch <= entry_target + entry_tol:
-                    entry_timestamp = _epoch_to_datetime(entry_epoch)
-                    entry_price = float(prices[entry_index])
-                    entry_delay_actual = entry_epoch - snapshot_epoch
-
-            if entry_timestamp is None or entry_price is None:
-                report.skipped_no_entry_tick += 1
-                continue
-
-            outcomes: dict[int, HorizonOutcome] = {}
-            missing_exit = False
-            for horizon in horizons:
-                target = float(entry_timestamp.timestamp()) + horizon
-                index = int(np.searchsorted(epochs, target, side="left"))
-                outcome = HorizonOutcome(
-                    horizon_seconds=horizon,
-                    exit_timestamp=None,
-                    exit_price=None,
-                    exit_delay_seconds=None,
-                    label="missing",
-                )
-                if index < epochs.size:
-                    exit_epoch = float(epochs[index])
-                    delay = exit_epoch - target
-                    if delay <= exit_tol:
-                        exit_price = float(prices[index])
-                        outcome = HorizonOutcome(
-                            horizon_seconds=horizon,
-                            exit_timestamp=_epoch_to_datetime(exit_epoch),
-                            exit_price=exit_price,
-                            exit_delay_seconds=delay,
-                            label=classify_direction(entry_price, exit_price),
-                        )
-                if outcome.label == "missing":
-                    missing_exit = True
-                outcomes[horizon] = outcome
-
-            if missing_exit:
-                report.snapshots_with_missing_exits += 1
-
-            report.snapshots.append(
-                Snapshot(
-                    snapshot_id=snapshot_id,
-                    active_id=active_id,
-                    snapshot_time=_epoch_to_datetime(snapshot_epoch),
-                    forming_start=_epoch_to_datetime(forming_start),
-                    completed_bars=completed,
-                    forming_bar=forming,
-                    price=price,
-                    window_ticks=window_ticks,
-                    entry_timestamp=entry_timestamp,
-                    entry_price=entry_price,
-                    entry_delay_seconds=entry_delay_actual,
-                    outcomes=outcomes,
-                    utc_offset_seconds=int(offsets_column[forming_range[0]]),
-                )
-            )
-            snapshot_id += 1
+        )
+        snapshot_id += 1
 
     return report

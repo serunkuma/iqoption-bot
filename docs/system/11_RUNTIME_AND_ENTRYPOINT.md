@@ -2,7 +2,7 @@
 
 Status: Current
 
-> `runner.py` is the only entry point. It owns process lifecycle and wiring; capture, sampling, features, models, routing, and execution stay independently testable. `serve` captures only — it does not build candles, compute features, or emit signals.
+> `runner.py` is the only entry point. It owns process lifecycle and wiring; capture, streaming, sampling, features, models, routing, and execution stay independently testable. `serve` stores events and candles and can make paper decisions at candle close.
 
 ---
 
@@ -12,10 +12,12 @@ Every command loads `config/default.toml` (or `--config`), validates it, and fai
 
 | Command | Purpose | Writes |
 |---------|---------|--------|
-| `serve` | Capture ticks from the browser extension | `data/raw/ticks-YYYY-MM-DD.jsonl` |
+| `serve` | Stream accepted ticks to the event/candle store; optionally make paper decisions | `data/stream/` |
 | `build` | Build the tick store, snapshots, features, labels, and dataset | `data/*.parquet` |
-| `train` | Train the four calibrated horizon models | `data/models/suite.pkl` and a dated copy |
+| `train` | Train the four calibrated horizon models | Timestamped `.joblib` plus manifest |
 | `backtest` | Replay the held-out evaluation slice through router and paper broker | `reports/backtest.{json,md}` |
+| `model-check` | Validate a runtime artifact and print its manifest | nothing |
+| `replay` | Rebuild candles from stored events and compare with recorded tables | nothing |
 | `diagnose` | Print a data-quality report for a capture or store | nothing |
 | `docs-check` | Validate documentation status labels, links, and index coverage | nothing |
 
@@ -27,7 +29,9 @@ Global flags:
 | `--log-level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py serve
+.\.venv\Scripts\python.exe runner.py serve --capture-only
+.\.venv\Scripts\python.exe runner.py model-check --model data\models\suite-YYYYMMDDTHHMMSSZ.joblib
+.\.venv\Scripts\python.exe runner.py replay --events data\stream\events --candles data\stream\candles
 .\.venv\Scripts\python.exe runner.py build --input data\ticks.csv
 .\.venv\Scripts\python.exe runner.py train
 .\.venv\Scripts\python.exe runner.py backtest
@@ -39,24 +43,19 @@ Global flags:
 ## `serve`
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py serve --raw-dir data\raw
+.\.venv\Scripts\python.exe runner.py serve --capture-only
+.\.venv\Scripts\python.exe runner.py serve --model data\models\suite-YYYYMMDDTHHMMSSZ.joblib
 ```
 
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--host` | `localhost` | Bind address |
 | `--port` | `8765` | WebSocket port |
-| `--raw-dir` | `data/raw` | JSONL capture directory; pass `''` to disable persistence |
+| `--stream-dir` | `[stream].root` | Stream store root |
+| `--model` | `[models].runtime_path` | Manifest-bearing `.joblib` artifact |
+| `--capture-only` | off | Store ticks/candles without loading a model or making decisions |
 
-`serve` installs a `JsonlTickSink` on the receiver, logs one warning that no candles, features, or signals are produced in this mode, and then blocks until `Ctrl+C`.
-
-Each accepted tick appends one line to `ticks-<UTC date>.jsonl`:
-
-```json
-{"received_at": "2026-11-18T12:00:02.100000+01:00", "active_id": 42, "price": 1.25, "payload": {"active_id": 42, "close": 1.25, "at": 123}}
-```
-
-The broker payload is preserved verbatim under `payload`. Only `received_at`, `active_id`, and `price` are promoted; the broker's `at` field is never used as the tick timestamp. Sink failures are logged and never terminate capture.
+Without `--capture-only`, startup requires a compatible `.joblib` artifact and fails with exit code `1` when it is missing, corrupt, or incompatible. The loaded artifact stays pinned for the process. The receiver forwards accepted events to `StreamStore`; it does not write the former daily raw JSONL capture. See [Streaming Runtime and Store](16_STREAMING_RUNTIME_AND_STORE.md) for event, storage, recovery, decision, and failure contracts.
 
 ---
 
@@ -76,12 +75,12 @@ Outputs, all under `config.store`:
 
 | File | Content |
 |------|---------|
-| `data/ticks.parquet` | Canonical ordered, deduplicated tick table |
+| `data/ticks.parquet` | Canonical batch tick table with sequence; exact duplicate events are preserved |
 | `data/features.parquet` | One row per validated snapshot |
 | `data/labels.parquet` | Long format, one row per snapshot per horizon |
 | `data/dataset.parquet` | Features joined to labels on `snapshot_id` |
 
-The command prints the build summary: tick count, duplicates dropped, out-of-order rows, candidate minutes, snapshots, feature/label/dataset rows, usable rows, config hash, and every sampler exclusion counter.
+The command prints the build summary: tick count, duplicate timestamp/price count, out-of-order rows, candidate minutes, snapshots, feature/label/dataset rows, usable rows, config hash, and sampler exclusion counters.
 
 An empty store returns exit code `1` rather than writing empty artifacts.
 
@@ -97,26 +96,32 @@ An empty store returns exit code `1` rather than writing empty artifacts.
 |------|---------|---------|
 | `--dataset` | `data/dataset.parquet` | Labelled dataset |
 
-Writes `data/models/suite.pkl` and a timestamped `suite-YYYYMMDDTHHMMSSZ.pkl` copy. Prints one line per horizon with row count, out-of-sample rows, held-out evaluation rows, Brier score, AUC, and calibrator. A rejected calibrator is printed as a note. Skipped horizons print their reason instead.
+Writes `data/models/suite-YYYYMMDDTHHMMSSZ.joblib` and the matching `.manifest.json` sidecar. Prints one line per horizon with row count, out-of-sample rows, held-out evaluation rows, Brier score, AUC, and calibrator. A rejected calibrator is printed as a note. Skipped horizons print their reason instead.
 
-The command fails with exit code `1` when the dataset is missing; it does **not** silently train on an empty dataset.
+The command fails with exit code `1` when the dataset is missing; it does **not** silently train on an empty dataset. No artifact is automatically promoted to the configured runtime path.
 
 ---
 
 ## `backtest`
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py backtest --dataset data\dataset.parquet --model data\models\suite.pkl
+.\.venv\Scripts\python.exe runner.py backtest --dataset data\dataset.parquet --model data\models\suite-YYYYMMDDTHHMMSSZ.joblib
 ```
 
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--dataset` | `data/dataset.parquet` | Labelled dataset, used for timing and outcomes |
-| `--model` | `data/models/suite.pkl` | Trained suite |
+| `--model` | configured runtime suite, latest dated `.joblib`, or legacy `suite.pkl` | Analysis/backtest suite |
 
 Only snapshots present in the suite's held-out evaluation table produce a probability. Every other snapshot is counted as `skipped_no_model`. The command writes `reports/backtest.json` and `reports/backtest.md` and prints the execution summary.
 
 When the suite has no evaluation rows, the command warns, writes a report with an empty calibration section, and trades nothing.
+
+## `model-check` and `replay`
+
+`model-check --model <path>` requires a `.joblib` artifact with a readable, matching manifest. It validates the artifact contract against the active configuration and prints the manifest and compatibility result. It does not activate or modify the artifact.
+
+`replay --events <root> [--candles <root>] [--dataset <path>]` reads hourly event parts, rebuilds closed candles with the runtime candle builder, and reports missing, extra, or mismatching candles. Supplying a dataset also checks feature parity. It exits `1` when the comparison reports a divergence.
 
 ---
 
@@ -130,7 +135,7 @@ When the suite has no evaluation rows, the command warns, writes a report with a
 |------|---------|---------|
 | `--input` | `data/ticks.csv` | `.csv`, `.jsonl`, or `.parquet` |
 
-Prints row count, duplicates dropped, out-of-order rows, first and last tick, span in seconds, and the number of whole minutes that contain at least one tick. This is the first check before a build: minutes with ticks is the ceiling on candidate snapshots.
+Prints row count, duplicate `(timestamp, price)` count, out-of-order rows, first and last tick, sequence range, span in seconds, and minutes with ticks. It accepts a file input, not a stream directory.
 
 ---
 
@@ -154,7 +159,7 @@ Output:
 
 ```text
 documentation check
-  files checked                : 42
+  files checked                : 44
   missing status               : 0
   broken link                  : 0
   orphan doc                   : 0
@@ -181,7 +186,7 @@ The checker validates structure, not truth. Prose that no longer matches the cod
 3. Components exchange plain data: `Tick`, `TickStore`, `Snapshot`, `FeatureVector`, `SignalProposal`, `Trade`.
 4. No component reads another component's private attributes.
 5. Every command that persists artefacts writes under `config.store`.
-6. `serve` is capture-only. Live feature computation and live signals are not implemented.
+6. `serve` performs candle-close inference and paper decisions when a compatible model is loaded; it does not place broker orders.
 
 ---
 
@@ -202,7 +207,8 @@ LightGBM's Windows DLL must load before pandas/pyarrow. If pandas is imported fi
 - [Tick store](../data/07_TICK_STORE.md)
 - [Snapshots and continuity](../data/08_SNAPSHOTS_AND_CONTINUITY.md)
 - [Reports and diagnostics](15_REPORTS_AND_DIAGNOSTICS.md)
+- [Streaming runtime and store](16_STREAMING_RUNTIME_AND_STORE.md)
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

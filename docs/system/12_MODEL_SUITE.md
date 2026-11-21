@@ -23,18 +23,18 @@ A `put` probability is the complement of the `call` probability. Ties and missin
 
 ## Input Features
 
-Each model consumes exactly the 16 `core16-v1` features in fixed order:
+Each model consumes exactly the 16 `core16-v2` features in fixed order:
 
 ```text
 z_poc, z_vah, z_val, inside_va, va_width_norm, poc_position,
 edge_proximity, excess_high, excess_low, excess_asymmetry,
-tick_rate_3_7, tick_rate_forming_3, price_speed_3_7,
-price_speed_forming_3, range_forming_3, price_change_forming
+tick_rate_3_7, tick_rate_last_3, price_speed_3_7,
+price_speed_last_3, range_last_3, price_change_last
 ```
 
-The wider `amt-v3` table (POC/VAH/VAL levels, raw tick rates, time features, quality flags) is stored for diagnostics only. Feeding raw price levels to the model would make it instrument- and price-scale-dependent.
+The wider `amt-v4` table (POC/VAH/VAL levels, raw tick rates, time features, quality flags) is stored for diagnostics only. Feeding raw price levels to the model would make it instrument- and price-scale-dependent.
 
-The feature engine is stateless, so the training matrix and a live vector are produced by the same function. See [Model Inputs](../data/09_MODEL_INPUTS.md).
+The feature engine is stateless, so the training matrix and runtime vector are produced by the same function. See [Model Inputs](../data/09_MODEL_INPUTS.md).
 
 ---
 
@@ -72,7 +72,7 @@ A fold is skipped when its training slice has fewer than `models.min_train_rows`
 
 ### Overlap Weights
 
-A snapshot every 30 seconds with a 180-second horizon means roughly six rows share any given expiry window. Each row carries about `30 / 180` of independent information.
+A snapshot every 60 seconds with a 180-second horizon means roughly three rows share any given expiry window. Each row carries about `60 / 180` of independent information.
 
 ```text
 spacing  = median difference between snapshot epochs
@@ -152,26 +152,27 @@ AUC is recorded only when the evaluation slice contains both classes.
 
 ## Final Refit
 
-After the walk-forward and calibration steps, the persisted estimator is refit on **all** usable rows for that horizon, not only the walk-forward training slices. The metrics still describe the honest held-out slice. This estimator is intended for future inference but is not currently connected to a live path. The calibrator is not refit on the full set, because that would undo the chronological separation.
+After the walk-forward and calibration steps, The persisted estimator is refit on **all** usable rows for that horizon, not only the walk-forward training slices. The metrics still describe the honest held-out slice. Runtime inference uses this estimator with the stored calibrator. The calibrator is not refit on the full set, because that would undo the chronological separation.
 
 ---
 
 ## Persistence
 
-The current `ModelSuite` is serialized with Python's standard `pickle` module, including its estimators, calibrators, metrics, skipped reasons, evaluation table, and version metadata. `runner.py train` writes a dated suite and `suite.pkl`; `runner.py backtest` loads that artifact. This is the implemented offline artifact path, not the intended runtime `.joblib` loader.
+`runner.py train` writes a timestamped `.joblib` artifact and a matching `.manifest.json` sidecar. The manifest records the SHA-256 artifact id, format version, ordered feature names, feature/core/label/decision/candle versions, instrument, config hash, horizons, skipped reasons, row counts, metrics, split metadata, and training environment. It is not automatically promoted to `models.runtime_path`.
 
 | Field | Value |
 |-------|-------|
-| `feature_names` | `core16-v1` names |
-| `feature_version` | `amt-v3` |
-| `core_feature_version` | `core16-v1` |
+| `feature_names` | `core16-v2` names and order |
+| `feature_version` | `amt-v4` |
+| `core_feature_version` | `core16-v2` |
 | `label_version` | `snapshot-horizon-v1` |
+| `decision_version` | `candle-close-v1` |
+| `candle_version` | `1m-clock-v1` |
+| `model_format_version` | `joblib-v1` |
 | `config_hash` | First 16 hex characters of a SHA-256 over the resolved config |
 | `trained_at` | UTC ISO 8601 timestamp |
 
-`ModelSuite.load` currently checks that the deserialized object is a `ModelSuite`; it does not yet enforce a runtime artifact manifest, library compatibility, artifact integrity, or a feature-contract match.
-
-The planned `.joblib` naming convention, manifest, compatibility checks, and fail-closed runtime behavior are not implemented. See [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md) before treating these as runtime guarantees.
+`ModelSuite.load` requires the `.joblib` sidecar, verifies the artifact hash, format, and feature order, and rejects incompatibilities. Runtime startup additionally compares feature/decision/candle/label versions, configured instrument, and configured horizons. `serve` and `model-check` fail closed when validation fails. Legacy pickle suites can still be loaded for analysis/backtest, but are rejected for runtime inference. Joblib artifacts must be trusted because deserialization can execute code.
 
 ---
 
@@ -202,4 +203,4 @@ The suite never fabricates a model and never reports a metric it cannot compute.
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

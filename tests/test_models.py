@@ -78,7 +78,7 @@ class TrainSuiteTests(unittest.TestCase):
             suite.evaluation["probability"].between(0.0, 1.0).all()
         )
         self.assertEqual(suite.config_hash, "test-hash")
-        self.assertEqual(suite.core_feature_version, "core16-v1")
+        self.assertEqual(suite.core_feature_version, "core16-v2")
 
     def test_evaluation_snapshots_come_from_the_dataset(self) -> None:
         config = make_config()
@@ -141,6 +141,57 @@ class TrainSuiteTests(unittest.TestCase):
 
         self.assertEqual(sorted(reloaded.models), sorted(suite.models))
         self.assertEqual(len(reloaded.evaluation), len(suite.evaluation))
+
+    def test_joblib_artifact_round_trips_with_a_manifest(self) -> None:
+        import json
+        import tempfile
+        from pathlib import Path
+
+        config = make_config()
+        suite = train_suite(training_dataset(config), config)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = suite.save(Path(directory) / "suite.joblib")
+            manifest_path = ModelSuite.manifest_path(path)
+            self.assertTrue(manifest_path.is_file())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["format_version"], "joblib-v1")
+            self.assertEqual(manifest["artifact_id"], suite.artifact_id)
+
+            reloaded = ModelSuite.load(path, require_manifest=True)
+
+        self.assertEqual(reloaded.artifact_id, suite.artifact_id)
+        self.assertEqual(sorted(reloaded.models), sorted(suite.models))
+        self.assertEqual(reloaded.validate(config), [])
+
+    def test_artifact_hash_mismatch_is_rejected(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from engine.models import ModelArtifactError
+
+        config = make_config()
+        suite = train_suite(training_dataset(config), config)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = suite.save(Path(directory) / "suite.joblib")
+            path.write_bytes(path.read_bytes() + b"\x00")
+            with self.assertRaises(ModelArtifactError):
+                ModelSuite.load(path, require_manifest=True)
+
+    def test_runtime_load_refuses_a_pickle(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from engine.models import ModelArtifactError
+
+        config = make_config()
+        suite = train_suite(training_dataset(config), config)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = suite.save(Path(directory) / "suite.pkl")
+            with self.assertRaises(ModelArtifactError):
+                ModelSuite.load(path, require_manifest=True)
 
 
 if __name__ == "__main__":

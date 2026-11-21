@@ -29,7 +29,7 @@ class BuildArtifacts:
     def summary(self) -> dict[str, object]:
         return {
             "ticks": len(self.store),
-            "duplicates_dropped": self.store.stats.get("duplicates_dropped", 0),
+            "duplicate_rows": self.store.stats.get("duplicate_rows", 0),
             "out_of_order": self.store.stats.get("out_of_order", 0),
             "snapshots": len(self.sampler.snapshots),
             "feature_rows": len(self.features),

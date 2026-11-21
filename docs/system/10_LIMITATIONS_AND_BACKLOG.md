@@ -17,33 +17,31 @@ Status: Current
 | Completeness | Gaps are detectable as missing minutes but their cause is unknown | No session or reconnect record exists |
 | Volume | Payload `volume` is unverified and unused | TPO relies on tick count |
 | Cadence | Real tick cadence on the target instrument is unmeasured | `min_ticks_per_bar = 1` may be far too permissive |
-| Near-duplicates | Only exact `(timestamp, price)` duplicates are dropped | Repeated prices at different times inflate density |
+| Repeated events | Exact duplicate `(timestamp, price)` events are preserved | Repeated frames can inflate tick density; impact is unvalidated |
 | Multi-instrument | The sampler filters to one `active_id` | Cross-instrument work is blocked |
 
 ### Pipeline
 
 | Area | Limitation | Impact |
 |------|------------|--------|
-| Live features | `serve` captures only; no live snapshots or vectors | No live signal path exists |
+| Live feature path | `serve` computes candle-close features only with a validated artifact | No sustained shadow/paper parity evidence exists |
 | Incremental build | `build` reads a whole file and rewrites all artefacts | Long captures mean long rebuilds |
-| Snapshot storage | `store.snapshots_path` is reserved but unused | Snapshots are rebuilt, not persisted |
-| Candle storage | Minute buckets exist only inside a build | No candle store or candle replay |
+| Snapshot storage | `store.snapshots_path` is reserved but unused | Snapshot metadata is rebuilt, not persisted |
+| Candle storage | Stream candles are persisted in immutable hourly parts; offline build also groups candles in memory | No compaction, retention, or direct stream-directory build input |
 | Performance | Features are computed per snapshot in Python loops | Slow on multi-day captures |
-| Single run | No incremental append to the tick store | Two captures mean two files, not one store |
 
 ### Models
 
 | Area | Limitation | Impact |
 |------|------------|--------|
 | Evidence | No real capture has shown an edge | The core hypothesis is unvalidated |
-| Sample size | Held-out evaluation is roughly the last quarter of the capture | Metrics are noisy |
+| Sample size | Held-out evaluation uses the later 30% of walk-forward OOS rows | Metrics are noisy |
 | Effective sample | Overlap weights are computed but not reported | Row counts overstate information |
 | Regime | No balance/imbalance gate | The primary AMT hypothesis is only partly tested |
 | Calibration | Small calibration slices often reject Platt and ship identity | Probabilities may be uncalibrated |
 | Drift | No monitoring | A stale model would go unnoticed |
 | Selection | One configuration per run; no seed or fold sweep | Fragility is unmeasured |
 | Time features | Excluded from the model | Session effects are untested |
-| Runtime artifact | No runtime `.joblib` loader; offline suite uses `suite.pkl` with standard `pickle` | Trained estimators are not loaded into a live signal loop |
 | Signal selection | Current router is deterministic EV selection; no learned selector | The target ML signal decision layer has not been evaluated |
 
 ### Execution and operations
@@ -51,11 +49,10 @@ Status: Current
 | Area | Limitation | Impact |
 |------|------------|--------|
 | Execution | Paper only; `demo` and `live` raise | No real order path |
-| Risk | Fixed stake and one open trade only | No daily loss limit, consecutive-loss limit, or sizing |
-| Kill switch | Not implemented | Unattended operation is unsafe |
-| Journal | `TradeJournal` exists but is not wired into the backtest | No per-trade audit file yet |
+| Risk | Fixed stake, one open trade, cooldown, and a daily realized-loss stop | No complete risk manager, consecutive-loss policy, sizing policy, or kill switch |
+| Journals | Runtime writes decision and trade JSONL journals | Restart continuity, retention, and audit workflows are unvalidated |
 | Monitoring | Console logs and offline reports | No metrics or alerts |
-| Config | Receiver host/port/buffer live in code | Deployment changes need edits |
+| Config | Receiver host/port remain module defaults with CLI overrides; receiver history buffer remains a constant | Some capture settings still require code changes |
 | Packaging | `requirements.txt` only; no installable package | Reproducibility depends on the venv |
 | Documentation freshness | `docs-check` validates labels, links, and index coverage only; the pre-commit hook runs it, but it can be bypassed | Prose can still describe behaviour that changed |
 
@@ -70,7 +67,7 @@ Status: Current
 | P0-1 | Verify frame semantics against the platform | Documented whether a frame is a tick or a partial candle, with evidence |
 | P0-2 | Measure real tick cadence per instrument | Per-minute tick distribution recorded; `min_ticks_per_bar` set from data |
 | P0-3 | Record sessions, reconnects, and gaps | Session table or flags; gaps visible without inference |
-| P0-4 | Add near-duplicate detection | Rule documented and counted |
+| P0-4 | Study repeated/near-duplicate feed events | Real-capture evidence and a documented policy |
 | P0-5 | Move receiver constants into configuration | `[server]` section; validation errors are clear |
 | P0-6 | Add structured logging | Key-value or JSON logs with `active_id`, frame outcome, counters |
 | P0-7 | Persist snapshots | `snapshots.parquet` written and reloadable |
@@ -83,10 +80,10 @@ Status: Current
 | P1-1 | Incremental tick store append | New captures merge without a full rebuild |
 | P1-2 | Vectorise the feature engine | Documented speed-up on a multi-day capture |
 | P1-3 | Report effective sample size | Overlap-adjusted count in reports |
-| P1-4 | Persist a candle table | Candles written and used for charting/reporting |
+| P1-4 | Validate and operationalize candle-part persistence | Recovery/replay evidence, retention, and compaction policy |
 | P1-5 | Add a rule-based AMT baseline | Baseline signals and EV recorded for comparison |
 | P1-6 | Add seed and offset sensitivity sweeps | Result variance reported |
-| P1-7 | Wire the trade journal into the backtest | One JSONL line per trade |
+| P1-7 | Define journal retention and audit/reconciliation workflow | Reproducible decision-to-outcome audit |
 | P1-8 | Report per-regime metrics | Balance/imbalance split using diagnostics |
 
 ### P2 — Model and execution
@@ -95,13 +92,13 @@ Status: Current
 |----|-------------|---------------------|
 | P2-1 | Implement the two-stage regime model | Regime rule validated; held-out EV improves |
 | P2-2 | Add drift monitoring | Rolling Brier/ECE with alert threshold |
-| P2-3 | Add a risk manager | Daily loss limit, consecutive-loss limit, stake sizing, tested |
+| P2-3 | Complete the risk manager | Beyond current paper gates: exposure limits, loss streak policy, and documented limits |
 | P2-4 | Add a kill switch | Manual and automatic stop, tested |
 | P2-5 | Implement a demo adapter | Order lifecycle, idempotency, reconciliation |
 | P2-6 | Complete the operational runbook | Tested start/stop/troubleshoot for every command |
 | P2-7 | Review legal and platform terms | Documented constraints before any live use |
 | P2-8 | Evaluate a learned direction/horizon/no-trade selector | Predefined target; compared with current EV-router baseline on untouched chronological data and independent captures |
-| P2-9 | Define and implement validated `.joblib` runtime loading | Versioned manifest and feature/target compatibility checks; invalid artifacts fail closed with explicit diagnostics |
+| P2-9 | Validate runtime artifact and replay behavior on independent captures | Sustained evidence, operational activation/rollback, and runtime/offline parity |
 
 ---
 
@@ -128,4 +125,4 @@ Status: Current
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

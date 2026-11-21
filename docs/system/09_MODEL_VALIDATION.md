@@ -4,7 +4,7 @@ Status: Current
 
 > Validation exists to answer one question: does the engine have positive expected value after payout, out of sample, on data it has never seen? Everything below is designed to make a false positive hard.
 
-The current validation path evaluates the four horizon probability models and deterministic EV router. A future learned selector must be evaluated separately against that unchanged baseline; the target and release principles below do not imply that a selector or runtime model loader already exists.
+The current validation path evaluates the four horizon probability models and deterministic EV router. Candle-close runtime inference and `.joblib` compatibility checks are implemented, but a learned selector must be evaluated separately against that baseline. Runtime wiring is not evidence of a validated edge.
 
 ---
 
@@ -50,7 +50,7 @@ Why two layers? Walk-forward alone still lets a calibrator see the same rows who
 | Calibration | Earlier 70% of OOS | Fit isotonic/Platt |
 | Evaluation | Later 30% of OOS | Metrics, backtest |
 
-With one snapshot per minute, the evaluation slice is roughly the last quarter of the capture. That is a deliberate cost: honest metrics on fewer rows rather than flattering metrics on many.
+With one snapshot per minute, overlapping labels still reduce effective sample size. The evaluation slice is later than the calibration slice; its actual size depends on usable rows and the walk-forward splits.
 
 ---
 
@@ -71,7 +71,7 @@ These are sanity thresholds, not acceptance criteria. A single capture that clea
 
 ## Overlapping Windows
 
-A 180-second horizon sampled every 30 seconds creates about six overlapping rows per expiry window. Two consequences:
+A 180-second horizon sampled once per minute creates overlapping label windows. Two consequences:
 
 1. Row counts overstate independent information. The effective sample is roughly `rows * spacing / horizon`.
 2. Any split that ignores time will place near-duplicate rows on both sides.
@@ -118,7 +118,7 @@ Before any demo or live work:
 - [ ] Weekday and weekend subsets are reported separately.
 - [ ] A rule-based AMT baseline and a random baseline are both beaten.
 - [ ] Trade count is large enough for the observed effect to be distinguishable from noise.
-- [ ] The result survives a changed random seed and a shifted snapshot offset.
+- [ ] The result is robust to a changed random seed and holds on independent captures at the fixed candle-close cadence.
 
 If the gate fails, the correct action is to return to feature research or declare the hypothesis unsupported on OTC data. It is not to lower the hurdle.
 
@@ -133,7 +133,7 @@ Before any learned direction/horizon/no-trade selector is promoted beyond shadow
 - Fail closed for ML proposals when the configured artifact is missing or incompatible; surface a diagnostic rather than silently using a fallback.
 - Do not tune the selector against the held-out evaluation slice or treat synthetic data as market evidence.
 
-These are planned promotion principles. The selector, `.joblib` runtime loader, and corresponding checks are not implemented. See [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md).
+The selector promotion principles remain planning work. The runtime loader and fail-closed artifact compatibility checks exist, but sustained shadow/paper evidence is not established. See [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md).
 
 ---
 
@@ -147,11 +147,11 @@ These are planned promotion principles. The selector, `.joblib` runtime loader, 
 | Has a real multi-day capture been validated? | No |
 | Is live execution safe? | No |
 
-### Latest synthetic run
+### Historical synthetic run (pre-candle-close contract)
 
-The checked-in synthetic capture (48,000 ticks over 800 minutes, one instrument) builds 793 snapshots and 3,172 dataset rows. Training produces all four horizons with 77–79 evaluation rows each; every Platt fit is rejected as non-increasing, so identity calibration ships. Held-out AUC ranges from 0.501 to 0.605 and Brier from 0.250 to 0.270.
+The following checked-in report predates the candle-close contract and used the former `:30` snapshot cadence, `core16-v1`, and `amt-v3`. Its metrics do not describe the current runtime/model versions. The checked-in synthetic capture (48,000 ticks over 800 minutes, one instrument) built 793 snapshots and 3,172 dataset rows. Training produced all four horizons with 77–79 evaluation rows each; every Platt fit was rejected as non-increasing, so identity calibration shipped. Held-out AUC ranged from 0.501 to 0.605 and Brier from 0.250 to 0.270.
 
-The backtest routes 81 snapshots, opens 55 trades, and closes 25 winners against 30 losers: win rate 0.455, PnL `-9.8` at unit stake. At the 60s payout of 0.80 the breakeven win rate is 0.556, so this run loses, as expected.
+That historical backtest routed 81 snapshots, opened 55 trades, and closed 25 winners against 30 losers: win rate 0.455, PnL `-9.8` at unit stake. At the 60s payout of 0.80 the breakeven win rate is 0.556, so that run lost, as expected.
 
 That is a correct and useful result. It shows the harness measures a losing system honestly instead of manufacturing trades. It says nothing about real AMT behaviour, because synthetic ticks have no auction structure.
 
@@ -183,4 +183,4 @@ Synthetic data has no auction participants and no real payout behaviour. It can 
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

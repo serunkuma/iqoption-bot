@@ -2,7 +2,7 @@
 
 Status: Current
 
-> Paper execution only. The broker turns a routed proposal into a trade, holds it to expiry, and resolves it against the recorded exit price. Demo and live modes are validated by configuration and then rejected.
+> Paper simulation only. The offline backtest and candle-close runtime use a local paper broker; neither path places broker orders. Runtime decisions are also gated by storage health, one-open-trade, cooldown, and daily realized-loss checks.
 
 ---
 
@@ -12,7 +12,7 @@ Status: Current
 
 `PaperBroker.__post_init__` raises `ExecutionError` for anything other than `paper`. This is deliberate: the configuration accepts the mode names so a future adapter can be specified, but no adapter exists, and the process fails instead of pretending to trade.
 
-There is no order placement, no account authentication, and no network execution path in the repository.
+There is no order placement, account authentication, or broker network execution path in the repository.
 
 ---
 
@@ -103,7 +103,7 @@ Win rate is measured over closed trades only. A void is neither a win nor a loss
 
 ## Backtest Replay
 
-`run_backtest` is the only place a trade is simulated. It walks snapshot groups in time order:
+`run_backtest` simulates held-out offline trades. Separately, the runtime paper broker tracks trades opened from live-feed candle-close decisions. The backtest walks snapshot groups in time order:
 
 1. Advance the broker's clock: `resolve_due(snapshot.entry_timestamp)`.
 2. Ask the suite for held-out probabilities: `evaluate_snapshot(snapshot_id)`.
@@ -129,28 +129,27 @@ The replay never calls `predict_vector`, so an in-sample probability cannot ente
 
 ---
 
-## Trade Journal
+## Runtime Journals
 
-`TradeJournal` writes one JSON object per trade to an append-only JSONL file, converting timestamps to ISO 8601. It is not wired into the backtest yet; the backtest reports are the current audit trail.
-
-When live or demo execution is added, the journal becomes the audit log and must record the decision inputs alongside the trade.
+The streaming runtime appends decision records and trade outcomes to JSONL journals under the stream root. Records include artifact/feature metadata and reason codes. These files are local paper-simulation evidence; retention, restart reconciliation, and independent audit workflows are not yet validated. Offline backtests continue to write their JSON/Markdown report bundle.
 
 ---
 
-## Risk Controls That Are Not Implemented
+## Runtime Risk Controls
 
 | Control | Status |
 |---------|--------|
 | Fixed stake | Implemented (`execution.stake`) |
 | One open trade per instrument | Implemented (`execution.max_open_trades`) |
-| Daily loss limit | Not implemented |
+| Cooldown | Implemented (`execution.cooldown_seconds`) |
+| Daily realized-loss limit | Implemented (`execution.daily_loss_limit`) |
 | Consecutive-loss limit | Not implemented |
 | Stake sizing / Kelly | Not implemented |
 | Kill switch | Not implemented |
 | Account state reconciliation | Not implemented |
 | Order idempotency | Not applicable yet |
 
-No live execution may be attempted until every missing control exists and is tested.
+These are limited paper-runtime gates, not a complete risk manager. No broker execution may be attempted until the missing controls are implemented and tested and the separate validation/readiness gates pass.
 
 ---
 
@@ -163,4 +162,4 @@ No live execution may be attempted until every missing control exists and is tes
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

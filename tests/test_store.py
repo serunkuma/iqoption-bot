@@ -29,7 +29,7 @@ class TickStoreTests(unittest.TestCase):
         self.assertEqual(store.stats["out_of_order"], 1)
         self.assertEqual(store.stats["total_rows"], 2)
 
-    def test_exact_duplicates_are_dropped(self) -> None:
+    def test_exact_duplicates_are_preserved(self) -> None:
         content = (
             "timestamp,price\n"
             "2026-11-18T12:00:00+00:00,1.1\n"
@@ -39,8 +39,10 @@ class TickStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = TickStore.from_csv(write_csv(directory, content))
 
-        self.assertEqual(len(store), 2)
-        self.assertEqual(store.stats["duplicates_dropped"], 1)
+        self.assertEqual(len(store), 3)
+        self.assertEqual(store.stats["duplicates_dropped"], 0)
+        self.assertEqual(store.stats["duplicate_rows"], 1)
+        self.assertEqual(store.frame["sequence"].tolist(), [0, 1, 2])
 
     def test_naive_timestamp_is_rejected(self) -> None:
         content = "timestamp,price\n2026-11-18T12:00:00,1.1\n"
@@ -115,10 +117,24 @@ class TickStoreTests(unittest.TestCase):
 
         self.assertEqual(store.prices.tolist(), [1.1, 1.2])
 
-    def test_synthetic_ticks_are_sorted_and_unique(self) -> None:
+    def test_jsonl_accepts_close_and_nested_payload(self) -> None:
+        content = (
+            '{"received_at":"2026-11-18T12:00:00+00:00","active_id":0,"close":1.1}\n'
+            '{"received_at":"2026-11-18T12:00:05+00:00","active_id":0,'
+            '"payload":{"close":1.2}}\n'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ticks.jsonl"
+            path.write_text(content, encoding="utf-8")
+            store = TickStore.from_jsonl(path, active_id=0)
+
+        self.assertEqual(store.prices.tolist(), [1.1, 1.2])
+
+    def test_synthetic_ticks_keep_every_event(self) -> None:
         store = TickStore.from_ticks(synthetic_ticks(minutes=2, per_minute=60))
         self.assertEqual(len(store), 120)
         self.assertEqual(store.stats["duplicates_dropped"], 0)
+        self.assertEqual(store.frame["sequence"].tolist(), list(range(120)))
         timestamps = store.frame["timestamp"]
         self.assertTrue(timestamps.is_monotonic_increasing)
 

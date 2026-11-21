@@ -2,23 +2,18 @@
 
 Status: Current
 
-> The tick store is the canonical tick table for the engine. It enforces the tick contract, orders and deduplicates rows, and exposes point-in-time lookups so nothing downstream can read the future.
+> The batch tick store is the canonical file-loaded tick table. It enforces the tick contract, preserves duplicates and sequence, stably orders rows, and exposes point-in-time lookups. Live streaming is owned by `engine.stream.StreamStore`.
 
 ---
 
 ## Position in the Pipeline
 
 ```text
-extension -> components/receiver.py -> data/raw/ticks-YYYY-MM-DD.jsonl
-                                              |
-                                    TickStore.from_jsonl
-                                              v
-                                       TickStore
-                                              v
-                                   snapshot sampler
+CSV / JSONL / Parquet -> TickStore -> offline sampler
+extension -> receiver -> StreamStore -> hourly event/candle parts -> runtime
 ```
 
-The store is built in memory during `build` and written to `data/ticks.parquet`. It is not a live database; there is no append-in-place path yet.
+`build` constructs the batch store in memory and writes `data/ticks.parquet`. `serve` uses the separate streaming store, which assigns acceptance sequences and persists event/candle parts.
 
 ---
 
@@ -26,15 +21,16 @@ The store is built in memory during `build` and written to `data/ticks.parquet`.
 
 | Column | Type | Meaning |
 |--------|------|---------|
-| `tick_id` | int64 | Row ordinal after sorting and deduplication |
+| `tick_id` | int64 | Store row ordinal after stable sorting |
+| `sequence` | int64 | Preserved or assigned event sequence; tie-breaker after timestamp |
 | `timestamp` | `datetime64[ns, UTC]` | `received_at`, the local receipt time |
 | `utc_offset_seconds` | int64 | Original UTC offset, retained for local-time features |
 | `price` | float64 | Tick price, from the payload `close` |
 | `active_id` | Int64 (nullable) | Instrument key |
 
-`tick_id` is assigned by the store. It is never trusted from an input file, and it is rebuilt on every load so a Parquet round-trip cannot duplicate or reorder ids.
+`tick_id` is assigned by the store and rebuilt after ordering. It is not a stream identity; `sequence` carries the event order. CSV/JSONL inputs without a sequence receive one based on row order. Parquet preserves the sequence column when present.
 
-The row order is always ascending `timestamp`, with a stable mergesort so ties keep their input order.
+Batch row order is ascending `(timestamp, sequence)` using a stable mergesort. Streaming ingestion follows accepted arrival order and rejects late events rather than sorting them into a finalized candle.
 
 ---
 
@@ -48,8 +44,9 @@ The row order is always ascending `timestamp`, with a stable mergesort so ties k
 | Price positive | Required; zero and negatives are rejected |
 | `active_id` optional | Nullable; CSV/JSONL may omit it |
 | `active_id` mismatch | Rejected when a configured `instrument.active_id` disagrees |
-| Exact duplicate `(timestamp, price)` | Dropped, first occurrence kept |
-| Out-of-order rows | Sorted, with a count recorded |
+| Exact duplicate `(timestamp, price)` | Preserved as a distinct row; duplicate count is diagnostic |
+| Out-of-order batch rows | Stable-sorted, with a count recorded |
+| Late streaming event | Rejected and counted; not persisted or used to rewrite a candle |
 
 Every violation raises `TickStoreError` with the line number. Bad input fails loudly; it is never repaired silently.
 
@@ -79,13 +76,9 @@ Parquet is treated as an already-validated store. The schema is still checked fo
 
 ---
 
-## Deduplication
+## Duplicate Preservation
 
-Duplicate detection is exact on `(timestamp, price)`.
-
-This removes frames the extension repeated or that arrived twice across a reconnect. It does not merge genuinely repeated prices at different timestamps: a market resting at one price still accrues TPO time, which is the intended behaviour.
-
-Near-duplicate detection is an open question, not an implemented rule.
+No exact or near-duplicate removal is applied. Repeated timestamp/price pairs remain distinct, each with sequence identity. `diagnose` reports the number of repeated `(timestamp, price)` pairs so their effect on tick density can be measured against real captures.
 
 ---
 
@@ -104,7 +97,7 @@ Near-duplicate detection is an open question, not an implemented rule.
 | `.between(start, end)` | Inclusive time slice |
 | `.last_price_at(timestamp)` | Last price at or before a time |
 | `.price_at(timestamps)` | Vectorised point-in-time merge |
-| `.appended(ticks)` | New store with ticks merged and re-deduplicated |
+| `.appended(ticks)` | New store with ticks merged and duplicates preserved |
 | `.write_parquet(path)` | Persist the store |
 
 `last_price_at` and `price_at` use a backward `merge_asof`, so a query never sees a future price. A query before the first tick returns null rather than the first price.
@@ -116,7 +109,8 @@ Near-duplicate detection is an open question, not an implemented rule.
 | Statistic | Meaning |
 |-----------|---------|
 | `total_rows` | Rows read from the source |
-| `duplicates_dropped` | Exact duplicates removed |
+| `duplicates_dropped` | Always zero; retained for compatibility in build summaries |
+| `duplicate_rows` | Exact repeated `(timestamp, price)` rows observed |
 | `out_of_order` | Adjacent timestamp inversions before sorting |
 
 `diagnose` prints these, and `build` includes them in its summary. They are the first signal of a broken capture.
@@ -133,11 +127,11 @@ The store does not currently carry a version column. The tick contract itself is
 
 | Gap | Consequence |
 |-----|-------------|
-| No live append path | Capture and build are separate runs |
-| No session table | Reconnects and gaps are only visible as missing minutes |
-| No near-duplicate rule | Repeated prices at different timestamps inflate tick counts |
+| Batch and stream stores are separate | `build` does not load the stream directory directly |
+| No session table | Reconnects and gaps have no explicit session identity |
+| No duplicate filtering | Repeated frames may inflate tick counts; this requires real-feed study |
 | No per-instrument partitioning | Multi-instrument is filtered, not stored separately |
-| CSV/JSONL import only | No streaming ingestion |
+| Batch `TickStore` is file based | Streaming ingestion uses the separate `engine.stream` package |
 
 See [Limitations and backlog](../system/10_LIMITATIONS_AND_BACKLOG.md).
 
@@ -152,4 +146,4 @@ See [Limitations and backlog](../system/10_LIMITATIONS_AND_BACKLOG.md).
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

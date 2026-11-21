@@ -2,7 +2,7 @@
 
 Status: Current
 
-> **Objective:** Build the analytical layer: whole-minute bucketing, the macro/fast/forming context windows, rolling TPO/Value Area profiles, the `amt-v3` feature table with a `core16-v1` model vector, snapshot-based labels `snapshot-horizon-v1`, and a rule-based baseline.
+> **Objective:** Build the analytical layer: whole-minute bucketing, candle-close decisions, rolling TPO/Value Area profiles, `amt-v4` diagnostics with a `core16-v2` model vector, `snapshot-horizon-v1` labels, and a rule-based baseline.
 
 ---
 
@@ -12,7 +12,7 @@ Status: Current
 - Define the active-instrument configuration.
 - Add durable storage for ticks, features, labels, and datasets.
 - Implement TPO/Value Area.
-- Implement the `amt-v3` feature table and the `core16-v1` model vector.
+- Implement the `amt-v4` feature table and the `core16-v2` model vector.
 - Implement snapshot-horizon labels with delayed entry.
 - Build a rule-based AMT baseline.
 - Evaluate weekday vs weekend behaviour.
@@ -23,20 +23,21 @@ Out of scope: model training, execution.
 
 ## Status
 
-Implemented and tested. The rule-based baseline is still open, and no candle or snapshot table is persisted.
+The candle-close offline path and streaming candle persistence are implemented and tested. Snapshots are not persisted separately, and the rule-based baseline is still open. See [Streaming Runtime and Store](../system/16_STREAMING_RUNTIME_AND_STORE.md) for the current runtime contract.
 
 | Component | Status | Location |
 |-----------|--------|----------|
 | Minute bucketing | Done | `engine/domain/timeframes.py` |
 | TPO profile and Value Area | Done | `engine/domain/profile.py` |
-| Snapshot gate | Done | `engine/sampler.py` |
-| Feature table and core vector | Done | `engine/features.py` |
+| Candle-close snapshot gate | Done | `engine/sampler.py` |
+| Feature table and core vector (`amt-v4` / `core16-v2`) | Done | `engine/features.py` |
 | Snapshot-horizon labels | Done | `engine/domain/labels.py` |
 | Dataset assembly | Done | `engine/build.py` |
 | Tick store | Done | `engine/store.py` |
 | Rule-based baseline | Not started | — |
 | Weekday/weekend analysis | Partial (diagnostics only) | `is_weekend` column |
-| Candle/snapshot persistence | Not started | — |
+| Stream candle persistence | Done | `engine/stream/` |
+| Dedicated snapshot persistence | Not started | — |
 
 ---
 
@@ -45,12 +46,13 @@ Implemented and tested. The rule-based baseline is still open, and no candle or 
 ### Candles and continuity
 
 - [x] Implement whole-minute bucketing from `received_at`.
-- [x] Define the duplicate policy: drop exact `(timestamp, price)` pairs.
+- [x] Preserve accepted duplicate events and count exact `(timestamp, price)` pairs in diagnostics.
 - [x] Separate forming and completed bars.
 - [x] Require a contiguous macro window.
 - [x] Require `min_ticks_per_bar` ticks per completed bar.
 - [ ] Emit gap markers into storage.
-- [ ] Persist a candle table.
+- [x] Persist finalized streaming candles in hourly Parquet parts.
+- [ ] Persist offline snapshots separately.
 - [ ] Validate OHLC invariants in a stored candle table.
 
 ### Configuration and metadata
@@ -65,7 +67,7 @@ Implemented and tested. The rule-based baseline is still open, and no candle or 
 
 ### Storage
 
-- [x] Persist raw ticks as JSONL.
+- [x] Persist streaming events as hourly Parquet parts.
 - [x] Persist the tick store as Parquet.
 - [x] Persist features, labels, and the dataset as Parquet.
 - [x] Record feature, core feature, label, and candle versions.
@@ -92,7 +94,7 @@ Implemented and tested. The rule-based baseline is still open, and no candle or 
 - [x] Implement layer ratios.
 - [x] Implement context and quality diagnostics.
 - [x] Freeze the causal slice at the snapshot time.
-- [x] Version the table `amt-v3` and the model vector `core16-v1`.
+- [x] Version the table `amt-v4` and the model vector `core16-v2`.
 - [ ] Add worked-example fixtures for every feature family.
 - [ ] Measure build time on a realistic tick volume.
 
@@ -104,7 +106,7 @@ Implemented and tested. The rule-based baseline is still open, and no candle or 
 - [x] Keep ties and missing exits explicit.
 - [x] Emit long-format labels keyed by `snapshot_id` and horizon.
 - [x] Join features and labels into one dataset.
-- [ ] Add a candle-close research label variant.
+- [x] Use candle-close decisions in the current snapshot-horizon label path.
 
 ### Baseline
 
@@ -120,7 +122,7 @@ Implemented and tested. The rule-based baseline is still open, and no candle or 
 
 - Continuity-gated snapshots with delayed entry and horizon exits.
 - TPO/Value Area engine.
-- `amt-v3` feature table and `core16-v1` vector.
+- `amt-v4` feature table and `core16-v2` vector.
 - `snapshot-horizon-v1` labels.
 - Joined Parquet dataset.
 - Rule-based baseline (open).
@@ -162,4 +164,4 @@ Implemented and tested. The rule-based baseline is still open, and no candle or 
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

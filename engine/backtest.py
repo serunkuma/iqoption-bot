@@ -70,9 +70,7 @@ def _stub_snapshot(group: pd.DataFrame, snapshot_id: int) -> Snapshot:
         snapshot_id=int(snapshot_id),
         active_id=int(first["active_id"]),
         snapshot_time=snapshot_time,
-        forming_start=snapshot_time,
         completed_bars=(),
-        forming_bar=None,  # type: ignore[arg-type]
         price=float(first["price"]),
         window_ticks=0,
         entry_timestamp=entry_timestamp,

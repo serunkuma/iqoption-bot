@@ -1,13 +1,17 @@
 """Stateless feature engine.
 
-The canonical entry point is :func:`compute_features`, which takes one
-validated :class:`~engine.sampler.Snapshot` and returns the model input vector
+The canonical entry point is :func:`compute_features`, which takes one validated
+candle-close :class:`~engine.sampler.Snapshot` and returns the model input vector
 plus diagnostic fields. The function has no state and no I/O, so the exact same
 code runs in research and in live inference.
 
+``core16-v2`` uses only completed candles. The four former forming-bar inputs now
+read the last completed candle, so the runtime and the offline build share one
+definition with no partial-bar state.
+
 ``build_diagnostic_table`` reproduces the older one-row-per-tick table for
-exploratory work. It routes through ``compute_features`` so the two paths
-cannot drift apart.
+exploratory work. It routes through ``compute_features`` so the two paths cannot
+drift apart.
 """
 
 from __future__ import annotations
@@ -36,11 +40,11 @@ CORE_FEATURES: tuple[str, ...] = (
     "excess_low",
     "excess_asymmetry",
     "tick_rate_3_7",
-    "tick_rate_forming_3",
+    "tick_rate_last_3",
     "price_speed_3_7",
-    "price_speed_forming_3",
-    "range_forming_3",
-    "price_change_forming",
+    "price_speed_last_3",
+    "range_last_3",
+    "price_change_last",
 )
 
 DIAGNOSTIC_FEATURES: tuple[str, ...] = (
@@ -54,18 +58,19 @@ DIAGNOSTIC_FEATURES: tuple[str, ...] = (
     "tail_length_low",
     "tick_rate_7",
     "tick_rate_3",
-    "tick_rate_forming",
+    "tick_rate_last",
     "price_change_7",
     "price_change_3",
+    "price_change_last",
     "price_speed_7",
     "price_speed_3",
-    "price_speed_forming",
+    "price_speed_last",
     "range_7",
     "range_3",
-    "range_forming",
+    "range_last",
     "range_speed_7",
     "range_speed_3",
-    "range_speed_forming",
+    "range_speed_last",
     "range_3_7",
     "time_sin",
     "time_cos",
@@ -84,6 +89,7 @@ FEATURE_COLUMNS: tuple[str, ...] = (
     "price",
     "feature_version",
     "core_feature_version",
+    "decision_version",
     *CORE_FEATURES,
     *DIAGNOSTIC_FEATURES,
 )
@@ -151,6 +157,7 @@ class FeatureVector:
             "price": price,
             "feature_version": config.feature_version,
             "core_feature_version": config.core_feature_version,
+            "decision_version": config.decision_version,
         }
         row.update(self.core)
         row.update(self.diagnostics)
@@ -163,7 +170,9 @@ def _safe_div(numerator: float | None, denominator: float | None) -> float | Non
     return numerator / denominator
 
 
-def _layer_stats(epochs: tuple[float, ...], prices: tuple[float, ...], duration: float) -> LayerStats:
+def _layer_stats(prices: tuple[float, ...], duration: float) -> LayerStats | None:
+    if not prices:
+        return None
     values = np.asarray(prices, dtype=float)
     return LayerStats(
         tick_count=len(prices),
@@ -187,7 +196,9 @@ def _sigma(prices: np.ndarray, min_changes: int) -> float | None:
     return sigma
 
 
-def _time_features(timestamp: datetime, utc_offset_seconds: int = 0) -> tuple[float, float, int, int]:
+def _time_features(
+    timestamp: datetime, utc_offset_seconds: int = 0
+) -> tuple[float, float, int, int]:
     local = timestamp.astimezone(timezone(timedelta(seconds=utc_offset_seconds)))
     seconds = (
         local.hour * 3600
@@ -200,35 +211,36 @@ def _time_features(timestamp: datetime, utc_offset_seconds: int = 0) -> tuple[fl
     return math.sin(angle), math.cos(angle), day_of_week, int(day_of_week >= 5)
 
 
-def compute_features(snapshot: Snapshot, config: Config) -> FeatureVector:
-    """Compute the core vector and diagnostics for one validated snapshot."""
-
-    macro_prices = np.asarray(
-        [price for bar in snapshot.completed_bars for price in bar.prices], dtype=float
+def _prices(bars: tuple[BarSlice, ...]) -> np.ndarray:
+    return np.asarray(
+        [price for bar in bars for price in bar.prices], dtype=float
     )
-    fast_bars = snapshot.completed_bars[-config.context.fast_candles :]
-    fast_prices = np.asarray([price for bar in fast_bars for price in bar.prices], dtype=float)
 
-    forming_start = snapshot.forming_bar.start_epoch
+
+def compute_features(snapshot: Snapshot, config: Config) -> FeatureVector:
+    """Compute the core vector and diagnostics for one candle-close snapshot."""
+
+    interval = float(config.candles.interval_seconds)
+    bars = snapshot.completed_bars
+    macro_prices = _prices(bars)
+    fast_bars = bars[-config.context.fast_candles :]
+    fast_prices = _prices(fast_bars)
+
+    last_bar = bars[-1] if bars else None
+    last_prices = np.asarray(last_bar.prices, dtype=float) if last_bar else np.array([])
+
     macro_duration = (
-        forming_start - snapshot.completed_bars[0].start_epoch
-        if snapshot.completed_bars
+        (bars[-1].start_epoch + interval) - bars[0].start_epoch if bars else 0.0
+    )
+    fast_duration = (
+        (fast_bars[-1].start_epoch + interval) - fast_bars[0].start_epoch
+        if fast_bars
         else 0.0
     )
-    fast_duration = forming_start - fast_bars[0].start_epoch if fast_bars else 0.0
-    forming_duration = max(snapshot.snapshot_time.timestamp() - forming_start, 1.0)
 
-    macro = (
-        _layer_stats((), tuple(macro_prices.tolist()), macro_duration)
-        if macro_prices.size
-        else None
-    )
-    fast = (
-        _layer_stats((), tuple(fast_prices.tolist()), fast_duration)
-        if fast_prices.size
-        else None
-    )
-    forming = _layer_stats((), snapshot.forming_bar.prices, forming_duration)
+    macro = _layer_stats(tuple(macro_prices.tolist()), macro_duration)
+    fast = _layer_stats(tuple(fast_prices.tolist()), fast_duration)
+    last = _layer_stats(tuple(last_prices.tolist()), interval)
 
     price = snapshot.price
 
@@ -272,8 +284,10 @@ def compute_features(snapshot: Snapshot, config: Config) -> FeatureVector:
 
     macro_tick_rate = macro.tick_rate if macro else None
     fast_tick_rate = fast.tick_rate if fast else None
+    last_tick_rate = last.tick_rate if last else None
     macro_price_speed = macro.price_speed if macro else None
     fast_price_speed = fast.price_speed if fast else None
+    last_price_speed = last.price_speed if last else None
 
     time_sin, time_cos, day_of_week, is_weekend = _time_features(
         snapshot.snapshot_time, snapshot.utc_offset_seconds
@@ -291,11 +305,13 @@ def compute_features(snapshot: Snapshot, config: Config) -> FeatureVector:
         "excess_low": profile.excess_low if profile else None,
         "excess_asymmetry": profile.excess_asymmetry if profile else None,
         "tick_rate_3_7": _safe_div(fast_tick_rate, macro_tick_rate),
-        "tick_rate_forming_3": _safe_div(forming.tick_rate, fast_tick_rate),
+        "tick_rate_last_3": _safe_div(last_tick_rate, fast_tick_rate),
         "price_speed_3_7": _safe_div(fast_price_speed, macro_price_speed),
-        "price_speed_forming_3": _safe_div(forming.price_speed, fast_price_speed),
-        "range_forming_3": _safe_div(forming.price_range, fast.price_range if fast else None),
-        "price_change_forming": forming.price_change,
+        "price_speed_last_3": _safe_div(last_price_speed, fast_price_speed),
+        "range_last_3": _safe_div(
+            last.price_range if last else None, fast.price_range if fast else None
+        ),
+        "price_change_last": last.price_change if last else None,
     }
 
     diagnostics: dict[str, float | None] = {
@@ -304,24 +320,27 @@ def compute_features(snapshot: Snapshot, config: Config) -> FeatureVector:
         "val": val,
         "profile_ticks": int(macro_prices.size),
         "sigma_7": sigma,
-        "window_bars": len(snapshot.completed_bars),
+        "window_bars": len(bars),
         "tail_length_high": profile.tail_length_high if profile else None,
         "tail_length_low": profile.tail_length_low if profile else None,
         "tick_rate_7": macro_tick_rate,
         "tick_rate_3": fast_tick_rate,
-        "tick_rate_forming": forming.tick_rate,
+        "tick_rate_last": last_tick_rate,
         "price_change_7": macro.price_change if macro else None,
         "price_change_3": fast.price_change if fast else None,
+        "price_change_last": last.price_change if last else None,
         "price_speed_7": macro_price_speed,
         "price_speed_3": fast_price_speed,
-        "price_speed_forming": forming.price_speed,
+        "price_speed_last": last_price_speed,
         "range_7": macro.price_range if macro else None,
         "range_3": fast.price_range if fast else None,
-        "range_forming": forming.price_range,
+        "range_last": last.price_range if last else None,
         "range_speed_7": macro.range_speed if macro else None,
         "range_speed_3": fast.range_speed if fast else None,
-        "range_speed_forming": forming.range_speed,
-        "range_3_7": _safe_div(fast.price_range if fast else None, macro.price_range if macro else None),
+        "range_speed_last": last.range_speed if last else None,
+        "range_3_7": _safe_div(
+            fast.price_range if fast else None, macro.price_range if macro else None
+        ),
         "time_sin": time_sin,
         "time_cos": time_cos,
         "day_of_week": day_of_week,
@@ -331,7 +350,7 @@ def compute_features(snapshot: Snapshot, config: Config) -> FeatureVector:
         "insufficient_ticks": int(
             0 < macro_prices.size < config.context.profile_min_ticks
         ),
-        "gap_in_window": int(not _bars_contiguous(snapshot.completed_bars)),
+        "gap_in_window": int(not _bars_contiguous(bars)),
     }
 
     return FeatureVector(core=core, diagnostics=diagnostics)
@@ -368,7 +387,7 @@ def build_diagnostic_table(ticks: list[Tick], config: Config) -> list[dict]:
 
     The rows are not the model input. They exist so that tick-level and
     snapshot-level research can be compared without maintaining two feature
-    implementations.
+    implementations. The current partial candle is treated as the last bar.
     """
 
     if not ticks:
@@ -391,27 +410,24 @@ def build_diagnostic_table(ticks: list[Tick], config: Config) -> list[dict]:
     tick_id = 0
 
     for candle_index, candle in enumerate(candles):
-        start = max(0, candle_index - macro)
-        completed = tuple(bar_cache[i] for i in range(start, candle_index))
-        forming_bar = bar_cache[candle_index]
+        start = max(0, candle_index - macro + 1)
+        previous = tuple(bar_cache[i] for i in range(start, candle_index))
+        current = bar_cache[candle_index]
 
         for position, tick_index in enumerate(candle.tick_indices):
             tick = ticks[tick_index]
             partial = BarSlice(
-                bucket_key=forming_bar.bucket_key,
-                start_epoch=forming_bar.start_epoch,
-                epochs=forming_bar.epochs[: position + 1],
-                prices=forming_bar.prices[: position + 1],
+                bucket_key=current.bucket_key,
+                start_epoch=current.start_epoch,
+                epochs=current.epochs[: position + 1],
+                prices=current.prices[: position + 1],
             )
+            completed = (*previous[-macro + 1 :], partial) if macro > 1 else (partial,)
             snapshot = Snapshot(
                 snapshot_id=tick_id,
                 active_id=tick.active_id if tick.active_id is not None else 0,
                 snapshot_time=tick.timestamp,
-                forming_start=datetime.fromtimestamp(
-                    forming_bar.start_epoch, tz=tick.timestamp.tzinfo
-                ),
                 completed_bars=completed,
-                forming_bar=partial,
                 price=tick.price,
                 window_ticks=sum(bar.tick_count for bar in completed),
                 entry_timestamp=None,

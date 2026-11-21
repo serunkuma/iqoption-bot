@@ -50,30 +50,15 @@ The receiver accepts a frame only when:
 - `msg` is a JSON object,
 - `msg.active_id` is present.
 
-Accepted frames get `received_at` (ISO 8601 with offset) if absent. Rejected frames are logged and dropped. The receiver does not check `close` is numeric and positive; the tick store does that at build time, so a bad price is rejected in one place with a line number.
+Accepted frames get `received_at` (ISO 8601 with offset) if absent. Rejected frames are logged and dropped. The receiver does not validate `close` as a positive numeric value; the streaming or batch store validates it before accepting a tick, with an explicit diagnostic on failure.
 
 `msg.at` and `msg.volume` are stored but never promoted or trusted.
 
 ---
 
-## Receiver to Sink
+## Receiver to Stream Store
 
-```python
-set_tick_sink(sink: Callable[[Any, dict], None] | None)
-```
-
-The sink is called as `sink(active_id, tick_data)` after validation and buffering. Exceptions are logged and swallowed so capture cannot be killed by a disk error.
-
-`JsonlTickSink` writes one record per accepted tick:
-
-| Field | Type | Meaning |
-|-------|------|---------|
-| `received_at` | ISO 8601 string with offset | Local receipt time |
-| `active_id` | int or string | Instrument key as received |
-| `price` | float | `msg.close` |
-| `payload` | object | Full original `msg`, unmodified |
-
-Daily files are `data/raw/ticks-YYYY-MM-DD.jsonl`, named by the UTC date of `received_at`.
+The receiver validates the envelope, stamps `received_at`, and forwards accepted events to the stream store. The stream store assigns an acceptance sequence and persists events and candles in hourly Parquet parts. Storage failures are surfaced and block runtime decisions; see [Streaming Runtime and Store](16_STREAMING_RUNTIME_AND_STORE.md).
 
 ---
 
@@ -81,16 +66,17 @@ Daily files are `data/raw/ticks-YYYY-MM-DD.jsonl`, named by the UTC date of `rec
 
 | File | Written by | Consumed by |
 |------|------------|-------------|
-| `data/raw/ticks-<date>.jsonl` | `serve` | `build --input`, `diagnose` |
+| `data/stream/events/YYYY-MM-DD/HH/part-*.parquet` | `serve` | `replay` |
+| `data/stream/candles/YYYY-MM-DD/HH/part-*.parquet` | `serve` | `replay` |
 | `data/ticks.parquet` | `build` | `build --input` |
 | `data/features.parquet` | `build` | research |
 | `data/labels.parquet` | `build` | research |
 | `data/dataset.parquet` | `build` | `train`, `backtest` |
-| `data/models/suite.pkl` | `train` | `backtest` |
+| `data/models/suite-<timestamp>.joblib` + manifest | `train` | `serve`, `model-check`, `backtest` |
 | `reports/backtest.json` | `backtest` | humans, tooling |
 | `reports/backtest.md` | `backtest` | humans |
 
-CSV import is an operator convenience: `timestamp,price[,active_id]`, ISO 8601 with offset. Parquet is the durable format.
+CSV import is an operator convenience: `timestamp,price[,active_id]`, ISO 8601 with offset. `build` and `diagnose` also accept JSONL and Parquet tick files. Legacy pickle suites can be read for analysis/backtest, but runtime inference requires a validated `.joblib` artifact.
 
 ---
 
@@ -102,12 +88,12 @@ CSV import is an operator convenience: `timestamp,price[,active_id]`, ISO 8601 w
 | `price` | Positive float, never null |
 | `active_id` | Nullable integer |
 | `utc_offset_seconds` | Original offset |
-| `tick_id` | Store-assigned, contiguous, ascending by time |
+| `tick_id` | Store-assigned row id |
 | `.frame` | Read-only view; callers must not mutate |
 | `.last_price_at(t)` | Last price at or before `t`; null before the first tick |
 | `.price_at(ts)` | Backward as-of merge, one row per query |
 
-The store guarantees that no lookup returns a future price.
+Batch loading preserves duplicate observations and stable-sorts by timestamp and sequence. The store guarantees that no lookup returns a future price.
 
 ---
 
@@ -118,9 +104,9 @@ A snapshot is the only object a feature function may consume.
 | Field | Contract |
 |-------|----------|
 | `snapshot_id` | Unique within one build |
-| `snapshot_time` | Decision time; features may use ticks `<=` this |
-| `completed_bars` | Exactly `macro_candles` contiguous bars |
-| `forming_bar` | Truncated at `snapshot_time` |
+| `snapshot_time` | Candle-close decision time |
+| `completed_bars` | Exactly `macro_candles` contiguous completed candles |
+| `forming_bar` | Not included in the decision feature vector |
 | `entry_timestamp` / `entry_price` | Resolved delayed entry |
 | `outcomes[horizon]` | Exit timestamp, price, delay, label |
 
@@ -173,11 +159,12 @@ Every artefact records the versions that produced it:
 
 | Version | Where stored |
 |---------|--------------|
-| `feature_version` | Feature rows, dataset, suite |
-| `core_feature_version` | Feature rows, dataset, suite |
-| `label_version` | Label rows, dataset, suite |
-| `config_hash` | Build summary, suite |
-| `trained_at` | Suite |
+| `feature_version` | Feature rows, dataset, manifest |
+| `core_feature_version` | Feature rows, dataset, manifest |
+| `label_version` | Label rows, dataset, manifest |
+| `decision_version` / `candle_version` | Runtime manifest |
+| `config_hash` | Build summary, model suite/manifest |
+| `trained_at` | Model suite/manifest |
 
 A consumer that does not recognise a version must refuse the artefact rather than guess.
 
@@ -192,4 +179,4 @@ A consumer that does not recognise a version must refuse the artefact rather tha
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

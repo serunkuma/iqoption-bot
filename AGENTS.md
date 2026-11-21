@@ -8,15 +8,16 @@ Status: Current
 
 ## 1. What This System Does
 
-IQ Option Bot is a local, documentation-driven project with three working layers:
+IQ Option Bot is a local, documentation-driven project with four working layers:
 
-1. **Capture** — a Chrome extension observes IQ Option WebSocket frames and forwards them to `components/receiver.py`, which validates, stamps `received_at`, buffers, and can persist them as daily JSONL.
-2. **Analysis** — `engine/` builds a validated tick store, continuity-gated snapshots, a stateless feature vector (`core16-v1`), snapshot-horizon labels, and a joined dataset.
-3. **Prediction and paper evaluation** — four calibrated LightGBM classifiers (one per horizon) feed an expected-value router, and `engine/backtest.py` replays held-out probabilities through a paper broker.
+1. **Capture** — a Chrome extension forwards IQ Option WebSocket frames to `components/receiver.py`, which validates and timestamps accepted events.
+2. **Streaming** — `engine/stream/` sequences events, builds completed candles, persists hourly Parquet parts, and maintains recoverable state.
+3. **Analysis and training** — `engine/` builds candle-close snapshots, the `core16-v2` input vector and `amt-v4` diagnostics, labels, datasets, and four calibrated classifiers.
+4. **Prediction and paper evaluation** — a manifest-validated `.joblib` suite can drive candle-close runtime inference and deterministic EV paper decisions; offline backtests replay held-out probabilities.
 
-There is **no live feature computation, no live signal loop, no demo/live execution, no risk manager, and no multi-instrument support.** The pipeline has not demonstrated an edge on real data. Never describe it as a working trading bot.
+There is **no broker order execution, no learned direction/horizon/no-trade selector, no complete risk manager or kill switch, and no multi-instrument support.** Runtime paper decisions exist, but the pipeline has not demonstrated an edge on real data. Never describe it as a working trading bot.
 
-The current four per-horizon classifiers are ML probability estimators, but the live inference loop is not connected and the final signal router is deterministic. Training currently saves `suite.pkl` using standard `pickle`; runtime `.joblib` loading and a learned direction/horizon/no-trade selector are planned, not implemented. See [docs/planning/ml-runtime-and-signal-selection.md](docs/planning/ml-runtime-and-signal-selection.md). Pocket Auto v3 is a reference repository only.
+The four per-horizon classifiers estimate probabilities; the final router is deterministic. Runtime inference requires a compatible `.joblib` artifact with a manifest and fails closed if validation fails. Legacy pickle suites remain for analysis/backtest only. The learned selector and evidence-based promotion remain planned. See [docs/planning/ml-runtime-and-signal-selection.md](docs/planning/ml-runtime-and-signal-selection.md). Pocket Auto v3 is a reference repository only.
 
 ---
 
@@ -27,7 +28,7 @@ iqoption-bot/
 ├── README.md                       # Project entry point
 ├── AGENTS.md                       # THIS FILE — agent guide and source of truth
 ├── RUNBOOK.md                      # Operating procedures
-├── runner.py                       # Entry point: serve/build/train/backtest/diagnose/docs-check
+├── runner.py                       # Entry point: serve/build/train/backtest/model-check/replay/diagnose/docs-check
 ├── requirements.txt                # Python dependencies
 ├── asset_names.json                # active_id → display-name map
 ├── .githooks/
@@ -44,9 +45,11 @@ iqoption-bot/
 ├── engine/
 │   ├── __init__.py                 # Imports .models first (LightGBM ordering)
 │   ├── config.py                   # TOML schema, validation, version constants
-│   ├── store.py                    # Tick store, dedupe, point-in-time lookup
+│   ├── store.py                    # Batch tick store, duplicate reporting, point-in-time lookup
+│   ├── stream/                     # Sequenced events, candles, Parquet, recovery
+│   ├── runtime.py                  # Candle-close inference and paper decisions
 │   ├── sampler.py                  # Snapshot gate, continuity, entry/exit timing
-│   ├── features.py                 # core16-v1 vector + amt-v3 diagnostics
+│   ├── features.py                 # core16-v2 vector + amt-v4 diagnostics
 │   ├── models.py                   # Calibration, walk-forward, model suite
 │   ├── router.py                   # EV hurdle and proposal selection
 │   ├── execution.py                # Paper broker, trade, journal
@@ -62,7 +65,7 @@ iqoption-bot/
 │   ├── manifest.json               # MV3 manifest
 │   ├── inject.js                   # Page-world WebSocket interception
 │   └── content.js                  # Local forwarder with reconnect and queue
-├── tests/                          # 121 unit tests
+├── tests/                          # Unit tests for offline and streaming paths
 ├── docs/                           # Documentation tree (start at docs/00_ORIENTATION.md)
 └── .gitignore
 ```
@@ -102,7 +105,7 @@ Points `core.hooksPath` at `.githooks/` so the `pre-commit` hook runs the docume
 .\.venv\Scripts\python.exe runner.py serve
 ```
 
-Listens on `ws://localhost:8765` and appends accepted ticks to `data/raw/ticks-YYYY-MM-DD.jsonl`. Pass `--raw-dir ''` to disable persistence.
+Listens on `ws://localhost:8765` and persists accepted events and completed candles under `data/stream/`. Use `--capture-only` to store data without loading a model; otherwise a compatible runtime `.joblib` artifact is required. See [RUNBOOK.md](RUNBOOK.md).
 
 ### Load the extension
 
@@ -114,8 +117,8 @@ Listens on `ws://localhost:8765` and appends accepted ticks to `data/raw/ticks-Y
 ### Build the dataset
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py diagnose --input data\raw\ticks-2026-11-18.jsonl
-.\.venv\Scripts\python.exe runner.py build --input data\raw\ticks-2026-11-18.jsonl
+.\.venv\Scripts\python.exe runner.py diagnose --input data\ticks.csv
+.\.venv\Scripts\python.exe runner.py build --input data\ticks.csv
 ```
 
 Inputs may be `.csv`, `.jsonl`, or `.parquet`. Default input is `data/ticks.csv`. Outputs are `data/ticks.parquet`, `data/features.parquet`, `data/labels.parquet`, and `data/dataset.parquet`.
@@ -127,7 +130,7 @@ Inputs may be `.csv`, `.jsonl`, or `.parquet`. Default input is `data/ticks.csv`
 .\.venv\Scripts\python.exe runner.py backtest
 ```
 
-`train` writes `data/models/suite.pkl`; `backtest` writes `reports/backtest.json` and `reports/backtest.md`.
+`train` writes a timestamped `.joblib` suite and manifest; `model-check` validates runtime compatibility. `backtest` writes `reports/backtest.json` and `reports/backtest.md`.
 
 ### Run the tests
 
@@ -159,12 +162,17 @@ IQ Option Traderoom
     -> window.postMessage                (source = IQ_TICK_BRIDGE)
     -> chrome-extension/content.js       (isolated world, validates sender)
     -> ws://localhost:8765
-    -> components/receiver.py            (validate, stamp received_at, buffer, sink)
-    -> data/raw/ticks-YYYY-MM-DD.jsonl
+    -> components/receiver.py            (validate, stamp received_at, buffer)
+    -> engine.stream.StreamStore         (sequenced events, candles, state)
+    -> engine.runtime.RuntimeEngine      (candle-close inference, paper decision)
+    -> decision and trade journals       (JSONL; no broker orders)
+
+Offline research:
+    -> CSV / JSONL / Parquet
     -> runner.py build
-    -> engine.store.TickStore            (ordered, deduplicated)
+    -> engine.store.TickStore            (stable timestamp/sequence order; duplicates preserved)
     -> engine.sampler                    (continuity gate, entry, exits)
-    -> engine.features                   (core16-v1 + amt-v3)
+    -> engine.features                   (core16-v2 + amt-v4)
     -> engine.domain.labels              (snapshot-horizon-v1)
     -> data/dataset.parquet
     -> engine.models                     (four calibrated classifiers)
@@ -173,7 +181,7 @@ IQ Option Traderoom
     -> reports/backtest.{json,md}
 ```
 
-This is the implemented offline path. The intended runtime path adds a validated `.joblib` loader, live feature/inference flow, and a learned signal selector; the current deterministic EV router remains the baseline. Deterministic payout, risk, and execution constraints are intended as hard gates around any future ML selection.
+The streaming runtime and offline path are implemented; they use the same causal feature function. The runtime router is deterministic and payout-aware. A learned selector, full risk layer, and broker execution remain unimplemented.
 
 ### Component Table
 
@@ -182,19 +190,19 @@ This is the implemented offline path. The intended runtime path adds a validated
 | WebSocket intercept | Observe page WebSocket messages | `chrome-extension/inject.js` |
 | Local forwarder | Forward raw payloads to the receiver | `chrome-extension/content.js` |
 | Receiver | Validate, stamp `received_at`, buffer, call sink | `components/receiver.py` |
-| Tick sink | Append accepted ticks to daily JSONL | `runner.py` (`JsonlTickSink`) |
-| Tick store | Contract, ordering, dedupe, point-in-time lookup | `engine/store.py` |
-| Snapshot sampler | Continuity gate, causal slice, entry/exit | `engine/sampler.py` |
+| Stream store | Sequenced events, candles, hourly Parquet, recovery | `engine/stream/` |
+| Batch tick store | Contract, stable ordering, point-in-time lookup; preserves duplicates | `engine/store.py` |
+| Snapshot sampler | Candle-close continuity gate, causal slice, entry/exit | `engine/sampler.py` |
 | Domain primitives | Buckets, TPO profile, labels | `engine/domain/` |
-| Feature engine | Stateless `core16-v1` + `amt-v3` | `engine/features.py` |
+| Feature engine | Stateless `core16-v2` + `amt-v4` | `engine/features.py` |
 | Dataset builder | Join features and labels, write Parquet | `engine/build.py` |
 | Model suite | Walk-forward training, calibration | `engine/models.py` |
 | Router | EV hurdle, direction/horizon selection | `engine/router.py` |
 | Paper broker | Open, hold, resolve paper trades | `engine/execution.py` |
 | Backtest | Held-out replay | `engine/backtest.py` |
 | Reports | Calibration, importance, JSON/Markdown | `engine/reports.py` |
-| Model service | Planned: live serving | Planned |
-| Risk manager | Planned: limits, sizing, kill switch | Planned |
+| Runtime engine | Candle-close inference and paper decisions | `engine/runtime.py` |
+| Risk controls | One open paper trade, cooldown, daily loss stop; not a full manager | `engine/runtime.py` |
 | Execution adapters | Planned: demo/live | Planned |
 
 ---
@@ -218,7 +226,6 @@ This is the implemented offline path. The intended runtime path adds a validated
 | `context` | `single_print_max_ticks` | `1` | Single-print threshold |
 | `context` | `volatility_min_changes` | `10` | Minimum changes for `sigma_7` |
 | `context` | `epsilon` | `1e-9` | Numerical guard |
-| `snapshot` | `offsets_seconds` | `[30]` | Evaluation points per minute |
 | `snapshot` | `entry_delay_ms` | `250` | Decision-to-entry delay |
 | `snapshot` | `entry_tolerance_seconds` | `1.0` | Entry tick tolerance |
 | `snapshot` | `exit_tolerance_seconds` | `5.0` | Exit tick tolerance |
@@ -239,9 +246,16 @@ This is the implemented offline path. The intended runtime path adds a validated
 | `models` | `learning_rate` | `0.03` | |
 | `models` | `num_leaves` | `15` | |
 | `models` | `min_child_samples` | `50` | |
+| `models` | `runtime_path` | `data/models/suite.joblib` | Configured runtime artifact; timestamped training output is not auto-promoted |
 | `execution` | `mode` | `paper` | `demo`/`live` are rejected |
 | `execution` | `stake` | `1.0` | Fixed stake |
 | `execution` | `max_open_trades` | `1` | Concurrency limit |
+| `execution` | `cooldown_seconds` | `0` | Pause after a resolved paper trade |
+| `execution` | `daily_loss_limit` | `5.0` | Daily realized-loss stop; `null` disables |
+| `stream` | `root` | `data/stream` | Streaming event/candle store root |
+| `stream` | `rotation_seconds` | `3600` | Validated setting; paths are fixed hourly |
+| `stream` | `flush_events` | `500` | Count-based event flush threshold |
+| `stream` | `max_buffer_events` | `50000` | Ingestion fails if this pending-event limit is exceeded |
 | `store` | `root` | `data` | Artifact root |
 | `store` | `ticks_path` | `data/ticks.parquet` | Tick store |
 | `store` | `snapshots_path` | `data/snapshots.parquet` | Reserved |
@@ -262,10 +276,12 @@ This is the implemented offline path. The intended runtime path adds a validated
 
 | Constant | Value |
 |----------|-------|
-| `FEATURE_VERSION` | `amt-v3` |
-| `CORE_FEATURE_VERSION` | `core16-v1` |
+| `FEATURE_VERSION` | `amt-v4` |
+| `CORE_FEATURE_VERSION` | `core16-v2` |
 | `LABEL_VERSION` | `snapshot-horizon-v1` |
 | `CANDLE_VERSION` | `1m-clock-v1` |
+| `DECISION_VERSION` | `candle-close-v1` |
+| `MODEL_FORMAT_VERSION` | `joblib-v1` |
 
 ---
 
@@ -281,8 +297,8 @@ This is the implemented offline path. The intended runtime path adds a validated
 | POC | Price bin with the highest tick count |
 | VAH / VAL | Edges of the range containing about 70% of recent ticks |
 | Excess / single print | Rejection tail with very few ticks at an extreme |
-| Snapshot | A validated evaluation point inside a forming minute |
-| Continuity gate | Requirement for 7 contiguous completed bars with enough ticks |
+| Snapshot | A validated decision point at a completed candle close |
+| Continuity gate | Requirement for 7 contiguous completed candles with enough ticks |
 | Delayed entry | First tick at or after snapshot time + 250ms within tolerance |
 | Exit | First tick at or after actual entry + horizon within tolerance |
 | Tie | Exit price equals entry price; non-directional, void in execution |
@@ -309,14 +325,14 @@ This is the implemented offline path. The intended runtime path adds a validated
 | 2026-11-18 | One timestamp per tick: local receipt time with offset | Removes the unverified `at` ambiguity |
 | 2026-11-18 | One active instrument at a time | Simplifies storage, features, and validation |
 | 2026-11-18 | Value Area expands in pairs over non-empty bins | Prevents empty edge bins from distorting VAH/VAL |
-| 2026-11-18 | Drop exact duplicate `(timestamp, price)` ticks | Prevents inflated tick density |
+| 2026-11-18 | Drop exact duplicate `(timestamp, price)` ticks (superseded 2026-11-21) | Former policy to prevent inflated tick density |
 | 2026-11-19 | Rename the entry point to `runner.py`; move capture to `components/receiver.py` | Tick capture is one component, not the system |
 | 2026-11-19 | Absorb `amt/` into a single `engine/` package | One importable, testable engine with domain primitives separate |
-| 2026-11-19 | Evaluate snapshots at configurable minute offsets, default `:30` | Fixed decision points avoid tick-level row explosion |
+| 2026-11-19 | Evaluate snapshots at configurable minute offsets, default `:30` (superseded 2026-11-21) | Former fixed decision point to avoid tick-level row explosion |
 | 2026-11-19 | Require 7 contiguous completed bars before a snapshot | Makes the feature window unambiguous and gap-free |
 | 2026-11-19 | Entry is the first tick at or after snapshot + 250ms | Prices the trade at a moment the engine could act |
 | 2026-11-19 | Exit is measured from actual entry, not snapshot time | The contract expires from the real fill |
-| 2026-11-19 | Keep exactly 16 model inputs (`core16-v1`) | Normalised features transfer; raw levels and time features invite overfitting |
+| 2026-11-19 | Keep exactly 16 model inputs (`core16-v1`, version superseded) | Normalised features transfer; raw levels and time features invite overfitting |
 | 2026-11-19 | Four binary classifiers instead of one multi-class model | Horizons have different payouts and noise; skipping is clean |
 | 2026-11-19 | Purged walk-forward with 180s purge and overlap weights | Overlapping label windows must not be treated as independent |
 | 2026-11-19 | Split walk-forward OOS 70/30 chronologically | Calibrator and evaluation must not share rows |
@@ -324,31 +340,32 @@ This is the implemented offline path. The intended runtime path adds a validated
 | 2026-11-19 | Reject a non-increasing Platt fit | A negative slope would invert every decision |
 | 2026-11-19 | EV hurdle `+0.03`, single best candidate, explicit no-trade | Conservative and auditable; never clamp a probability |
 | 2026-11-19 | Paper execution only; demo/live raise `ExecutionError` | No risk layer or execution adapter exists |
-| 2026-11-19 | Persist ticks as daily JSONL, analysis as Parquet | Append-only capture; columnar analysis |
+| 2026-11-19 | Persist ticks as daily JSONL, analysis as Parquet (superseded 2026-11-21) | Former append-only capture design; streaming now writes hourly Parquet parts |
 | 2026-11-19 | Import LightGBM before pandas | Prevents a Windows DLL access violation in `LGBM_DatasetSetField` |
 | 2026-11-19 | Keep the two-stage regime design as research only | No validated regime rule and not enough rows per regime |
 | 2026-11-20 | Version the pre-commit hook in `.githooks/` and install it by setting `core.hooksPath` | Hooks stay reviewable with the code; no copy step into `.git/hooks` |
 | 2026-11-20 | Have the hook call `tools/check_docs.py` directly | Needs only the standard library, so it still runs when LightGBM or the venv is broken |
 | 2026-11-20 | Treat Pocket Auto v3 as reference material, not the IQ Option implementation target | Keep repository facts and project plans distinct |
-| 2026-11-20 | Plan `.joblib` as the runtime artifact naming convention; retain `suite.pkl` as current behavior until implementation changes it | Documentation must distinguish future model loading from today's offline train/backtest persistence |
+| 2026-11-20 | Plan `.joblib` as the runtime artifact naming convention; retain `suite.pkl` as current behavior (superseded 2026-11-21) | Former offline-only artifact design; current runtime uses manifest-validated `.joblib` |
 | 2026-11-20 | Evaluate a learned direction/horizon/no-trade selector against the deterministic EV router; keep payout/risk/execution constraints as hard gates | ML selection is the target, but market evidence and non-ML safety limits remain mandatory |
 | 2026-11-20 | Fail closed for ML proposals when a configured runtime artifact is missing or incompatible | No silent fallback to a stale or different model; surface an explicit diagnostic |
+| 2026-11-21 | Candle-close streaming runtime uses `core16-v2` / `amt-v4` and manifest-validated `.joblib`; paper decisions do not place broker orders | Keep current runtime behavior distinct from the learned selector and demo/live execution |
+| 2026-11-21 | Preserve repeated accepted events with distinct sequence identities; report exact timestamp/price repeats rather than deduplicating | Maintain the capture record and make tick-density impact measurable |
+| 2026-11-21 | Use one candle-close decision per eligible minute instead of the former `:30` snapshot offset | Align offline snapshots and runtime decisions to finalized candles |
+| 2026-11-21 | Synchronize operator and system docs with the streaming/runtime implementation | Document behavior and limitations without changing code |
 
 ### Known Limitations
 
-- Frame semantics, real tick cadence, and completeness are unverified.
-- No live feature computation, live signal loop, demo adapter, or live execution.
-- No risk manager: fixed stake and one open trade only.
-- No candle or snapshot store; both are rebuilt inside a build.
-- Batch-only build; no incremental append.
+- Frame semantics, real tick cadence, and feed completeness are unverified.
+- Runtime inference and paper decisions exist, but sustained shadow/paper parity and a real-data edge have not been established.
+- No broker order adapter, learned selector, complete risk manager, or kill switch.
+- Streaming events and candles persist in hourly parts; offline snapshots are not stored separately, and stream retention/compaction is undefined.
+- Batch `build` is not incremental; the runtime rolling candle window warms up after restart.
 - Single instrument only; the sampler filters to one `active_id`.
-- Held-out evaluation is a small slice; metrics are noisy.
-- No rule-based baseline yet.
-- No drift monitoring.
-- Reports omit per-fold and per-session breakdowns.
-- Receiver host/port and buffer size are still module constants.
-- No runtime artifact loader or live model inference exists; current suites use standard `pickle` in `suite.pkl`, not the planned `.joblib` runtime convention.
-- The current signal router is deterministic. A learned selector, its target, and its model scope remain unimplemented.
+- Held-out evaluation is small; metrics are noisy.
+- No rule-based baseline, drift monitoring, or per-fold/per-session report breakdowns.
+- Receiver host/port have CLI overrides, but capture buffer and other receiver constants remain in code.
+- The router is deterministic. Selector target, scope, and promotion criteria remain unimplemented.
 
 See [`docs/system/10_LIMITATIONS_AND_BACKLOG.md`](docs/system/10_LIMITATIONS_AND_BACKLOG.md).
 
@@ -398,8 +415,8 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 ## 8. Agent Rules
 
 1. **Keep this file current** — update it when architecture, commands, or decisions change.
-2. **Do not overstate the system** — no live execution, no live features, no edge.
-3. **Preserve the tick/candle distinction** — ticks are captured; candles are built inside a build.
+2. **Do not overstate the system** — runtime paper inference exists, but there is no broker execution or validated edge.
+3. **Preserve the tick/candle distinction** — events are captured; streaming candles are persisted and offline candles are rebuilt from file inputs.
 4. **Record decisions** — add a row to the decision log and a change-log entry.
 5. **Use copy-paste-ready PowerShell commands** with the virtual environment path.
 6. **Run tests after changes** — `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v`.
@@ -414,7 +431,7 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 15. **Never map a tie or missing exit to a direction** — keep both explicit and unusable for directional training.
 16. **Import `engine` before pandas** — protects the LightGBM Windows DLL ordering.
 17. **Do not change a version string without changing the definition** — versions trace artefacts to code.
-18. **Keep current and planned ML behavior separate** — never claim `.joblib` runtime loading or a learned router exists until implemented and tested.
+18. **Keep current and planned ML behavior separate** — runtime `.joblib` loading and deterministic paper decisions exist; the learned selector and broker order execution do not.
 19. **Use Pocket Auto v3 only as reference material** — do not conflate its optimizer ML or signal engines with the IQ Option implementation.
 
 ---
@@ -440,9 +457,10 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 | 2026-11-19 | Test suite expanded to 117 with `tests/test_docs.py` | Implementation agent |
 | 2026-11-20 | Added the versioned `.githooks/pre-commit` documentation check and `tools/install_hooks.py`; test suite is 121 | Implementation agent |
 | 2026-11-20 | Documented the distinction between current offline ML, deterministic routing, and the planned `.joblib` runtime and learned selector | Documentation agent |
+| 2026-11-21 | Updated the guide for streaming persistence, candle-close inference, model manifests, paper runtime gates, and remaining validation gaps | Documentation agent |
 
 ---
 
 ## 10. Last Updated
 
-**2026-11-20 by Documentation agent**
+**2026-11-21 by Documentation agent**

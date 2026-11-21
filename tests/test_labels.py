@@ -12,9 +12,7 @@ def snapshot(outcomes: dict[int, HorizonOutcome], snapshot_id: int = 0) -> Snaps
         snapshot_id=snapshot_id,
         active_id=0,
         snapshot_time=BASE,
-        forming_start=BASE,
         completed_bars=(),
-        forming_bar=None,  # type: ignore[arg-type]
         price=1.0,
         window_ticks=0,
         entry_timestamp=BASE + timedelta(milliseconds=250),

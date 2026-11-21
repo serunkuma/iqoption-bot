@@ -1,8 +1,12 @@
 """Tick ingestion and storage.
 
 The store is the first component of the engine. It owns the canonical tick
-table, enforces ordering and deduplication, and provides point-in-time price
+table, preserves arrival order with a sequence, and provides point-in-time price
 lookups so that nothing downstream can accidentally read the future.
+
+Exact duplicate ``(timestamp, price)`` rows are kept. The streaming store rejects
+late events; batch loads use a stable sort by ``(timestamp, sequence)`` so replay
+is deterministic.
 
 Primary format is Parquet. CSV is accepted only as an import path.
 """
@@ -19,7 +23,14 @@ import pandas as pd
 
 from .domain.timeframes import Tick
 
-TICK_COLUMNS = ("tick_id", "timestamp", "utc_offset_seconds", "price", "active_id")
+TICK_COLUMNS = (
+    "tick_id",
+    "sequence",
+    "timestamp",
+    "utc_offset_seconds",
+    "price",
+    "active_id",
+)
 
 
 class TickStoreError(ValueError):
@@ -71,7 +82,7 @@ def load_ticks_csv(
     *,
     active_id: int | None = None,
 ) -> tuple[list[Tick], dict[str, int]]:
-    """Load ticks from CSV, enforce the contract, sort, and deduplicate.
+    """Load ticks from CSV, enforce the contract, and preserve row order.
 
     Returns the ticks and a counter dictionary for the load report.
     """
@@ -108,7 +119,7 @@ def load_ticks_csv(
 
 
 class TickStore:
-    """Immutable, ordered, deduplicated tick table."""
+    """Immutable, ordered tick table. Duplicate rows are preserved."""
 
     def __init__(self, frame: pd.DataFrame) -> None:
         required = {"timestamp", "price"}
@@ -121,11 +132,13 @@ class TickStore:
             frame = pd.DataFrame(
                 {
                     "timestamp": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "sequence": pd.Series(dtype="int64"),
                     "utc_offset_seconds": pd.Series(dtype="int64"),
                     "price": pd.Series(dtype="float64"),
                     "active_id": pd.Series(dtype="Int64"),
                 }
             )
+            duplicate_rows = 0
         else:
             frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
             frame["price"] = frame["price"].astype("float64")
@@ -134,7 +147,15 @@ class TickStore:
             if "utc_offset_seconds" not in frame.columns:
                 frame["utc_offset_seconds"] = 0
             frame["utc_offset_seconds"] = frame["utc_offset_seconds"].astype("int64")
-            frame = frame.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
+            if "sequence" not in frame.columns:
+                frame["sequence"] = np.arange(len(frame), dtype=np.int64)
+            frame["sequence"] = frame["sequence"].astype("int64")
+            duplicate_rows = int(
+                frame.duplicated(subset=["timestamp", "price"]).sum()
+            )
+            frame = frame.sort_values(
+                ["timestamp", "sequence"], kind="mergesort"
+            ).reset_index(drop=True)
 
         frame = frame.drop(columns=["tick_id"], errors="ignore")
         frame.insert(0, "tick_id", np.arange(len(frame), dtype=np.int64))
@@ -142,6 +163,7 @@ class TickStore:
         self.stats: dict[str, int] = {
             "total_rows": len(frame),
             "duplicates_dropped": 0,
+            "duplicate_rows": duplicate_rows,
             "out_of_order": 0,
         }
 
@@ -154,9 +176,24 @@ class TickStore:
     def from_ticks(cls, ticks: Sequence[Tick]) -> "TickStore":
         if not ticks:
             return cls.empty()
+
+        next_sequence = max(
+            (tick.sequence for tick in ticks if tick.sequence is not None),
+            default=-1,
+        ) + 1
+        sequences: list[int] = []
+        for tick in ticks:
+            if tick.sequence is None:
+                sequences.append(next_sequence)
+                next_sequence += 1
+            else:
+                sequences.append(tick.sequence)
+                next_sequence = max(next_sequence, tick.sequence + 1)
+
         frame = pd.DataFrame(
             {
                 "timestamp": [tick.timestamp for tick in ticks],
+                "sequence": sequences,
                 "utc_offset_seconds": [
                     int(tick.timestamp.utcoffset().total_seconds())
                     for tick in ticks
@@ -165,9 +202,7 @@ class TickStore:
                 "active_id": [tick.active_id for tick in ticks],
             }
         )
-        store = cls(frame)
-        store._dedupe()
-        return store
+        return cls(frame)
 
     @classmethod
     def from_csv(cls, path: str | Path, *, active_id: int | None = None) -> "TickStore":
@@ -190,8 +225,10 @@ class TickStore:
     ) -> "TickStore":
         """Load the receiver's raw JSONL capture.
 
-        Each line is ``{"received_at", "active_id", "price", "payload"}``. The
-        payload is preserved on disk but not promoted into the tick table.
+        Each line is ``{"received_at", "active_id", "price", "payload"}``. Older
+        captures may carry ``close`` or nest the price under ``payload``; both
+        shapes are accepted so existing files stay readable. The payload is
+        preserved on disk but not promoted into the tick table.
         """
 
         import json
@@ -199,6 +236,16 @@ class TickStore:
         source = Path(path)
         if not source.is_file():
             raise TickStoreError(f"raw capture not found: {source}")
+
+        def price_from(record: dict) -> object:
+            if "price" in record:
+                return record["price"]
+            if "close" in record:
+                return record["close"]
+            payload = record.get("payload")
+            if isinstance(payload, dict) and "close" in payload:
+                return payload["close"]
+            raise KeyError("price")
 
         ticks: list[Tick] = []
         with source.open("r", encoding="utf-8") as handle:
@@ -212,9 +259,12 @@ class TickStore:
                     raise TickStoreError(
                         f"line {line_no}: invalid JSON record"
                     ) from exc
+                if not isinstance(record, dict):
+                    raise TickStoreError(f"line {line_no}: record must be an object")
+                stamp = record.get("received_at", record.get("timestamp"))
                 try:
-                    timestamp = _parse_timestamp(str(record["received_at"]), line_no)
-                    price = _parse_price(str(record["price"]), line_no)
+                    timestamp = _parse_timestamp(str(stamp), line_no)
+                    price = _parse_price(str(price_from(record)), line_no)
                 except KeyError as exc:
                     raise TickStoreError(
                         f"line {line_no}: missing field {exc.args[0]!r}"
@@ -235,22 +285,12 @@ class TickStore:
         return store
 
     # -- mutations -------------------------------------------------------
-    def _dedupe(self) -> None:
-        before = len(self._frame)
-        frame = self._frame.drop_duplicates(subset=["timestamp", "price"], keep="first")
-        frame = frame.reset_index(drop=True)
-        frame["tick_id"] = np.arange(len(frame), dtype=np.int64)
-        self._frame = frame
-        self.stats["duplicates_dropped"] = before - len(frame)
-
     def appended(self, ticks: Sequence[Tick]) -> "TickStore":
-        """Return a new store with additional ticks merged and re-deduped."""
+        """Return a new store with additional ticks merged in arrival order."""
 
         if not ticks:
             return self
-        return TickStore.from_ticks(
-            [*self.as_ticks(), *ticks]
-        )
+        return TickStore.from_ticks([*self.as_ticks(), *ticks])
 
     def write_parquet(self, path: str | Path) -> Path:
         destination = Path(path)
@@ -280,7 +320,12 @@ class TickStore:
 
     def as_ticks(self) -> list[Tick]:
         return [
-            Tick(row.timestamp.to_pydatetime(), float(row.price), _as_int(row.active_id))
+            Tick(
+                row.timestamp.to_pydatetime(),
+                float(row.price),
+                _as_int(row.active_id),
+                int(row.sequence),
+            )
             for row in self._frame.itertuples(index=False)
         ]
 

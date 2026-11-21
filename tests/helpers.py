@@ -39,7 +39,6 @@ def make_config(
     context_values.update(context or {})
 
     snapshot_values = {
-        "offsets_seconds": (30,),
         "entry_delay_ms": 250,
         "entry_tolerance_seconds": 2.0,
         "exit_tolerance_seconds": 5.0,
@@ -59,7 +58,13 @@ def make_config(
 
     from engine.config import ExecutionConfig, ModelConfig
 
-    execution_values = {"mode": "paper", "stake": 1.0, "max_open_trades": 1}
+    execution_values = {
+        "mode": "paper",
+        "stake": 1.0,
+        "max_open_trades": 1,
+        "cooldown_seconds": 0,
+        "daily_loss_limit": None,
+    }
     execution_values.update(execution or {})
 
     model_values = {

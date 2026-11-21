@@ -24,7 +24,7 @@ Out of scope: live execution.
 
 The pipeline is built and tested. Validation on real captures is the remaining gate.
 
-This phase describes the current offline probability models and deterministic router. The current model suite is serialized as `suite.pkl` with standard `pickle`; the requested `.joblib` runtime artifact and learned signal selector belong to the future runtime/selection phase, not this completed offline training implementation. See [ML Runtime and Signal Selection](ml-runtime-and-signal-selection.md).
+Training and held-out offline evaluation are implemented. Timestamped `.joblib` suites with manifests are produced; runtime loading validates compatibility and fails closed. Candle-close inference and paper decisions exist, but real-capture validation, sustained runtime/offline parity, and a learned selector remain open. See [ML Runtime and Signal Selection](ml-runtime-and-signal-selection.md).
 
 | Component | Status | Location |
 |-----------|--------|----------|
@@ -73,8 +73,8 @@ This phase describes the current offline probability models and deterministic ro
 - [x] Reject a non-increasing calibration fit.
 - [x] Skip empty or one-class horizons with a reason.
 - [x] Register model artefacts with versions and a config hash.
-- [x] Persist the current suite as `suite.pkl` for offline train/backtest use.
-- [ ] Define and validate a learned direction/horizon/no-trade selector against the existing EV router (runtime integration is later work).
+- [x] Persist a timestamped `.joblib` suite with manifest for runtime compatibility checks.
+- [ ] Define and validate a learned direction/horizon/no-trade selector against the existing deterministic EV router.
 - [ ] Implement the rule-based Stage 1 regime gate.
 - [ ] Train balance and imbalance models per horizon.
 - [ ] Document Approach B as research only.
@@ -150,4 +150,4 @@ This phase describes the current offline probability models and deterministic ro
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

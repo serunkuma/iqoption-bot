@@ -18,23 +18,23 @@ The project succeeds only if the model clears the validation gate. A working pip
 
 | Layer | State |
 |-------|-------|
-| Tick capture | Live; buffered and optionally persisted as daily JSONL |
-| Persistence | JSONL capture plus Parquet store |
-| Candles | Whole-minute bucketing inside the build; no candle store |
-| Snapshots | Continuity-gated, delayed entry, per-horizon exits |
-| Features | `amt-v3` table, `core16-v1` model vector, stateless |
+| Tick capture | Live receiver; `serve` streams accepted events to the stream store |
+| Persistence | Hour-partitioned event/candle Parquet parts, state recovery, decision/trade JSONL journals; file inputs remain supported |
+| Candles | Whole-minute candle builder in `engine/stream/`, persisted as parts |
+| Snapshots | Candle-close cadence, continuity-gated completed-candle window, delayed entry, per-horizon exits |
+| Features | `amt-v4` diagnostics, `core16-v2` model vector, stateless |
 | Labels | `snapshot-horizon-v1`, ties and missing exits explicit |
 | Models | Four calibrated LightGBM classifiers, purged walk-forward |
-| Model artifact | Offline `suite.pkl` with standard `pickle`; no runtime `.joblib` loader |
+| Model artifact | Timestamped `.joblib` plus manifest; runtime validates hash and compatibility; legacy pickle remains for analysis/backtest |
 | Router | Deterministic payout-aware EV hurdle, explicit no-trade; not ML-based |
 | Backtest | Held-out replay through a paper broker |
 | Execution | Paper only |
-| Risk | Fixed stake, one open trade; nothing else |
-| Tests | 111 unit tests passing |
+| Runtime gates | Paper-only, one open trade, configured cooldown and daily loss stop; not a complete risk manager |
+| Tests | 159 unit tests currently pass; see [Testing Strategy](system/05_TESTING.md) |
 
 No real capture has produced a result distinguishable from noise. The core hypothesis remains open.
 
-The target runtime model format is `.joblib`, and the target includes a learned selector for direction/horizon/no-trade. Both remain planning work. The learned selector must be evaluated against the current per-horizon probability models plus deterministic EV router; payout, risk, and execution constraints remain hard gates.
+The candle-close runtime and validated `.joblib` loading are implemented. The learned direction/horizon/no-trade selector remains planning work and must be evaluated against the current per-horizon models plus deterministic EV router. Passing tests do not establish real-feed validity or a trading edge.
 
 ---
 
@@ -45,7 +45,7 @@ The target runtime model format is `.joblib`, and the target includes a learned 
 | 1 | Tick capture hardening | Trustworthy, persistent tick stream | Partial |
 | 2 | Candles, features, labels | Analytical layer and dataset | Implemented offline |
 | 3 | Model and validation | Calibrated suite, honest backtest, go/no-go | Built; not validated on real data |
-| 4 | ML runtime, signal selection, and staged operations | Validated `.joblib` loading, learned selector evaluation, shadow/paper loop, risk controls, and later gated demo/live readiness | Planning |
+| 4 | ML runtime, signal selection, and staged operations | Runtime and paper decisions implemented; selector evaluation, sustained shadow/paper validation, risk controls, and any separate demo/live readiness remain | In progress |
 
 ---
 
@@ -61,7 +61,7 @@ flowchart LR
 
 - Phase 2 code exists; it depends on Phase 1 only for trustworthy input data.
 - Phase 3 code exists; its results depend on a real multi-day capture.
-- Phase 4 must not start until the validation gate passes.
+- Runtime paper research can proceed before the gate; demo/live execution must not begin until the validation and separate safety/readiness gates pass.
 
 ---
 
@@ -83,9 +83,9 @@ flowchart LR
 | M12 | 4 | Paper/demo execution with reconciliation | Open |
 | M13 | 4 | Monitoring, alerts, tested runbook | Open |
 | M14 | 4 | Live readiness review | Open |
-| M15 | 4 | Versioned `.joblib` artifact contract and fail-closed runtime loading documented and implemented | Open |
+| M15 | 4 | Versioned `.joblib` artifact contract and fail-closed runtime loading documented and implemented | Done |
 | M16 | 4 | Learned selector evaluated against the deterministic EV-router baseline on untouched chronological data | Open |
-| M17 | 4 | Shadow and sustained live-paper inference validated against offline replay | Open |
+| M17 | 4 | Shadow and sustained live-paper inference validated against offline replay | Open — runtime code exists; sustained evidence not collected |
 
 ---
 
@@ -96,11 +96,11 @@ flowchart LR
 | AMT has no edge on OTC data | High | Medium | Rule-based baseline; validation gate; stop if unsupported |
 | Broker changes the feed or pricing algorithm | High | Medium | Schema drift detection; separate captures; drift monitoring |
 | Timestamp semantics are wrong | High | Medium | Local `received_at`; `at` never promoted; replay tests |
-| Tick density is biased | Medium | Medium | Dedupe rules; `min_ticks_per_bar`; sensitivity analysis |
+| Repeated frames inflate tick density | Medium | Medium | Events are preserved; report repeated timestamp/price patterns and validate against real captures |
 | Weekend synthetic regime | Medium | High | Weekend flag; separate evaluation; no weekend trading initially |
 | Overfitting | High | High | Walk-forward; purge; held-out evaluation; calibration |
 | Payout changes | Medium | Medium | Configured payouts; re-evaluate EV when they change |
-| Data loss on disconnect | Medium | Medium | Raw capture; gap counters; queue limits documented |
+| Data loss on disconnect | Medium | Medium | Sequenced event persistence, stream recovery, late/gap counters, and bounded extension queue |
 | Execution bug | High | Medium | Paper only today; risk layer before any demo adapter |
 | Platform or legal restriction | High | Low–medium | Review terms and jurisdiction before live trading |
 
@@ -144,7 +144,8 @@ flowchart LR
 - [Phase 3: ML pipeline and validation](planning/phase-3-ml-pipeline-and-validation.md)
 - [Phase 4: ML runtime, execution, and operations](planning/phase-4-execution-and-operations.md)
 - [ML runtime and signal selection](planning/ml-runtime-and-signal-selection.md)
+- [Streaming runtime and store](system/16_STREAMING_RUNTIME_AND_STORE.md)
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

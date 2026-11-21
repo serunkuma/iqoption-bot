@@ -4,14 +4,14 @@ Status: Current
 
 > The implemented architecture is four shallow calibrated binary classifiers, one per expiry horizon, trained on purged walk-forward splits. The earlier two-stage regime design is retained as research, not as the shipped path.
 
-> **Boundary:** This is the current offline training and evaluation path. `predict_vector` is not wired to live features, and the current EV router is deterministic. The planned runtime loader and learned signal selector are described in [ML Runtime and Signal Selection](../planning/ml-runtime-and-signal-selection.md).
+> **Boundary:** Training and backtesting remain offline. `serve` uses `predict_vector` from a candle-close runtime with a validated artifact; the EV router is deterministic. The learned signal selector and evidence gates remain planning work.
 
 ---
 
 ## Implemented Architecture
 
 ```text
-dataset (one row per snapshot per horizon)
+dataset (one row per candle-close snapshot per horizon)
         |
         +--> 60s  classifier --> calibrator --> p(call)
         +--> 90s  classifier --> calibrator --> p(call)
@@ -95,7 +95,7 @@ The router computes `EV = q * (1 + payout) - 1` and requires `EV >= min_ev`. It 
 | Later 30% of OOS | Metrics, calibration report, backtest replay |
 | All usable rows | Final shipped estimator refit |
 
-The backtest may only call `evaluate_snapshot`, which reads the later 30%. It cannot call `predict_vector`. This prevents the in-sample replay bug that produced 254 losing trades in an earlier iteration.
+The backtest may only call `evaluate_snapshot`, which reads the later 30%. It cannot call `predict_vector`. This prevents in-sample probabilities from entering the backtest. The live runtime uses `predict_vector` only after a compatible artifact is loaded.
 
 ---
 
@@ -118,7 +118,7 @@ A model with 0.55 AUC and Brier 0.25 is not distinguishable from noise at these 
 
 | Recorded | Where |
 |----------|-------|
-| Feature, core feature, label versions | Dataset rows, suite |
+| Feature, core feature, label, decision, and candle versions | Dataset rows, suite/manifest |
 | Config hash | Build summary, suite |
 | Random seed | Config |
 | Held-out evaluation rows | Suite |
@@ -150,9 +150,8 @@ Until then, the four-horizon suite remains the current offline model path.
 - Regime gating.
 - Drift monitoring.
 - Online or incremental learning.
-- Live inference (the vector function exists; the loop does not).
-- Runtime loading of a validated `.joblib` artifact. The current model suite is saved as `suite.pkl` using Python `pickle`.
-- A learned selector for direction, expiry, and no-trade. The current router applies deterministic payout-aware EV and tie-break rules to model probabilities.
+- A learned selector for direction, expiry, and no-trade. The runtime currently applies deterministic payout-aware EV and tie-break rules to model probabilities.
+- Sustained shadow/paper sessions, validated replay parity on independent captures, and operational promotion/rollback procedures.
 - Ensembling, stacking, or hyperparameter search.
 - Payout forecasting: payouts are configured.
 
@@ -169,4 +168,4 @@ Until then, the four-horizon suite remains the current offline model path.
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

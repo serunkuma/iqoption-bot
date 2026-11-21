@@ -1,10 +1,9 @@
 import unittest
-from datetime import timedelta
 
 from engine.sampler import build_snapshots
 from engine.store import TickStore
 
-from .helpers import BASE, make_config, synthetic_ticks
+from .helpers import make_config, synthetic_ticks
 
 
 def store_from(ticks) -> TickStore:
@@ -16,18 +15,21 @@ class SamplerTests(unittest.TestCase):
         config = make_config()
         report = build_snapshots(store_from(synthetic_ticks(minutes=12)), config)
 
-        # 12 minutes, 3 completed bars required -> snapshots for minutes 3..11.
+        # Minutes 0..11 produce 11 closed candles (the last never closes), so
+        # with a 3-bar window only keys 2..10 are eligible: 9 snapshots.
         self.assertEqual(len(report.snapshots), 9)
-        self.assertEqual(report.skipped_insufficient_history, 3)
+        self.assertEqual(report.skipped_insufficient_history, 2)
+        self.assertEqual(report.candidate_minutes, 11)
 
-    def test_snapshot_lands_on_the_configured_offset(self) -> None:
+    def test_snapshot_lands_on_the_candle_close(self) -> None:
         config = make_config()
         report = build_snapshots(store_from(synthetic_ticks(minutes=12)), config)
 
         first = report.snapshots[0]
-        self.assertEqual(first.snapshot_time.second, 30)
+        self.assertEqual(first.snapshot_time.second, 0)
         self.assertEqual(first.snapshot_time.minute, 3)
-        self.assertEqual(first.forming_start.minute, 3)
+        self.assertEqual(first.snapshot_time.microsecond, 0)
+        self.assertEqual(first.decision_version, "candle-close-v1")
 
     def test_window_contains_exactly_the_completed_bars(self) -> None:
         config = make_config()
@@ -37,16 +39,18 @@ class SamplerTests(unittest.TestCase):
         self.assertEqual(len(first.completed_bars), 3)
         self.assertTrue(first.contiguous)
         self.assertEqual(first.window_ticks, 180)
+        self.assertEqual(first.price, first.completed_bars[-1].close)
 
-    def test_features_never_see_ticks_after_the_snapshot(self) -> None:
+    def test_features_never_see_ticks_after_the_candle_close(self) -> None:
         config = make_config()
         report = build_snapshots(store_from(synthetic_ticks(minutes=12)), config)
 
         for snapshot in report.snapshots:
-            latest = max(epoch for epoch in snapshot.forming_bar.epochs)
-            self.assertLessEqual(latest, snapshot.snapshot_time.timestamp())
+            cutoff = snapshot.snapshot_time.timestamp()
             for bar in snapshot.completed_bars:
-                self.assertLess(bar.start_epoch, snapshot.forming_start.timestamp())
+                latest = max(bar.epochs)
+                self.assertLess(latest, cutoff)
+                self.assertLess(bar.start_epoch, cutoff)
 
     def test_entry_is_the_first_tick_after_the_delay(self) -> None:
         config = make_config()
@@ -95,15 +99,12 @@ class SamplerTests(unittest.TestCase):
         self.assertGreater(report.skipped_sparse_bar, 0)
 
     def test_no_entry_tick_skips_the_snapshot(self) -> None:
+        # One-second ticks cannot land inside [close + 0.25, close + 0.35].
         config = make_config(snapshot={"entry_tolerance_seconds": 0.1})
-        ticks = [
-            tick
-            for tick in synthetic_ticks(minutes=12)
-            if tick.timestamp.second != 31
-        ]
-        report = build_snapshots(store_from(ticks), config)
+        report = build_snapshots(store_from(synthetic_ticks(minutes=12)), config)
 
         self.assertGreater(report.skipped_no_entry_tick, 0)
+        self.assertEqual(report.snapshots, [])
 
     def test_report_serialises_to_a_flat_dictionary(self) -> None:
         config = make_config()

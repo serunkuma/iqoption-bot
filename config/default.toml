@@ -21,8 +21,7 @@ volatility_min_changes = 10
 epsilon = 1e-9
 
 [snapshot]
-# Evaluation points inside the forming minute. Default: one per minute at :30.
-offsets_seconds = [30]
+# Decisions occur at candle close. The intra-minute offsets mode was removed.
 entry_delay_ms = 250
 entry_tolerance_seconds = 1.0
 exit_tolerance_seconds = 5.0
@@ -54,11 +53,21 @@ n_estimators = 300
 learning_rate = 0.03
 num_leaves = 15
 min_child_samples = 50
+runtime_path = "data/models/suite.joblib"
 
 [execution]
 mode = "paper"
 stake = 1.0
 max_open_trades = 1
+cooldown_seconds = 0
+daily_loss_limit = 5.0
+
+[stream]
+root = "data/stream"
+rotation_seconds = 3600
+flush_events = 500
+compression = "zstd"
+max_buffer_events = 50000
 
 [store]
 root = "data"

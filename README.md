@@ -2,19 +2,20 @@
 
 Status: Current
 
-> **Current status: a working offline prediction engine fed by a live tick capture, with a paper-only backtest.** The project captures IQ Option browser WebSocket frames, persists them as daily JSONL, builds a validated Parquet tick store, samples continuity-gated snapshots, computes a stateless 16-feature vector, attaches per-horizon labels, trains four calibrated LightGBM classifiers, and replays held-out probabilities through an expected-value router and a paper broker.
+> **Current status: a local streaming and offline research system with paper-only decisions.** The browser extension forwards IQ Option WebSocket frames to `runner.py serve`, which stores accepted events and closed candles in hourly Parquet parts. When given a compatible model artifact, `serve` computes candle-close features and records paper decisions; it does not place orders.
 >
-> It does **not** place orders, compute live features, run a live signal loop, manage risk, or support more than one instrument. The pipeline has never demonstrated an edge on real data. Do not use it with real money.
+> There is no broker execution, learned signal selector, complete risk manager, or multi-instrument support. The pipeline has never demonstrated an edge on real data. Do not use it with real money.
 
 ---
 
 ## What It Does Today
 
 - A Chrome Manifest V3 extension runs on `*.iqoption.com`, observes the page's WebSocket traffic, and forwards matching frames to `ws://localhost:8765`.
-- `components/receiver.py` validates each frame, stamps `received_at`, buffers 500 raw messages per `active_id`, and can persist every accepted tick as a daily JSONL file.
-- `engine/store.py` loads CSV, JSONL, or Parquet into a validated, ordered, deduplicated tick store with point-in-time price lookup.
-- `engine/sampler.py` requires seven contiguous completed 1-minute bars before emitting a snapshot at a configurable minute offset, then resolves a delayed entry and one exit per horizon.
-- `engine/features.py` computes the 16-input `core16-v1` vector plus the `amt-v3` diagnostic table from one snapshot, with no state and no lookahead.
+- `components/receiver.py` validates each frame, stamps `received_at`, buffers 500 raw messages per `active_id`, and forwards accepted events to the stream store.
+- `engine/stream/` preserves accepted events with a sequence, builds candles, rejects late events, persists hourly Parquet parts, and maintains restart state.
+- `engine/store.py` loads CSV, JSONL, or Parquet into a validated tick table; exact duplicates are preserved and batch rows are stably ordered by timestamp and sequence.
+- `engine/sampler.py` emits one offline decision snapshot per eligible candle close, after a contiguous completed-candle window, then resolves delayed entry and horizon outcomes.
+- `engine/features.py` computes the 16-input `core16-v2` vector plus the `amt-v4` diagnostic table from completed candles, with no state and no lookahead.
 - `engine/domain/labels.py` produces `snapshot-horizon-v1` labels at 60/90/120/180 seconds; ties and missing exits stay explicit.
 - `engine/models.py` trains four calibrated binary classifiers using purged walk-forward, splits out-of-sample rows 70/30 chronologically, and stores the later 30% as the held-out evaluation slice.
 - `engine/router.py` computes payout-aware expected value, applies the `+0.03` hurdle, and returns one proposal or an explicit no-trade with a reason code.
@@ -25,13 +26,12 @@ The capture console has been manually verified to show live prices. Everything d
 
 ## What It Does Not Do Yet
 
-- No live candle, snapshot, or feature computation — `serve` captures only.
-- No live signal loop and no order execution; `demo` and `live` mode names are validated then rejected.
-- No risk manager, daily loss limit, or kill switch; fixed stake and one open trade only.
+- Runtime paper decisions are implemented, but no broker order execution; `demo` and `live` modes are rejected.
+- Runtime gates include one open paper trade, cooldown, and a configured daily loss stop; this is not a complete risk manager or kill switch.
 - No multi-instrument support; the sampler filters to one `active_id`.
-- No candle or snapshot store; both are rebuilt inside a build.
+- Streaming events and candles are persisted in hourly parts; offline snapshots are rebuilt and not stored separately.
 - No incremental append; `build` reads a whole file.
-- No rule-based baseline, no drift monitoring, no per-fold or per-session report breakdowns.
+- No learned selector, rule-based baseline, drift monitoring, or per-fold/per-session report breakdowns.
 - No evidence of positive expected value after payout.
 
 ## Quick Start
@@ -50,13 +50,13 @@ Install the versioned git hooks once per clone so the documentation checker runs
 .\.venv\Scripts\python.exe tools\install_hooks.py
 ```
 
-### 2. Start capture
+### 2. Start the stream store
 
 ```powershell
 .\.venv\Scripts\python.exe runner.py serve
 ```
 
-The receiver listens on `ws://localhost:8765` and appends accepted ticks to `data/raw/ticks-YYYY-MM-DD.jsonl`. Pass `--raw-dir ''` to disable persistence.
+The receiver listens on `ws://localhost:8765` and stores accepted events and closed candles under `data/stream/`. Use `--capture-only` to store data without loading a model or making decisions. Otherwise, `serve` requires a compatible `.joblib` artifact at `models.runtime_path` or the `--model` path.
 
 ### 3. Load the extension
 
@@ -71,18 +71,18 @@ The extension reconnects every two seconds after a disconnect. While disconnecte
 
 Watch the receiver console. Each accepted frame logs the asset identity, `close`, `open`, `min`, `max`, `volume`, `at`, and buffer length.
 
-### 5. Inspect the capture
+### 5. Inspect a file capture
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py diagnose --input data\raw\ticks-2026-11-18.jsonl
+.\.venv\Scripts\python.exe runner.py diagnose --input data\ticks.csv
 ```
 
-Prints row count, duplicates dropped, out-of-order rows, first and last tick, span, and minutes with ticks.
+`diagnose` reads a `.csv`, `.jsonl`, or `.parquet` file and reports duplicate `(timestamp, price)` pairs, out-of-order rows, sequence range, and time coverage. Streaming files can be reviewed with `replay`.
 
 ### 6. Build the dataset
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py build --input data\raw\ticks-2026-11-18.jsonl
+.\.venv\Scripts\python.exe runner.py build --input data\ticks.csv
 ```
 
 Inputs may be `.csv`, `.jsonl`, or `.parquet`; the default is `data/ticks.csv`. Outputs are `data/ticks.parquet`, `data/features.parquet`, `data/labels.parquet`, and `data/dataset.parquet`. The command prints a build summary with snapshot exclusions and the artifact paths.
@@ -94,7 +94,7 @@ Inputs may be `.csv`, `.jsonl`, or `.parquet`; the default is `data/ticks.csv`. 
 .\.venv\Scripts\python.exe runner.py backtest
 ```
 
-`train` writes `data/models/suite.pkl` plus a dated copy and prints per-horizon row counts, evaluation rows, Brier, AUC, and calibration mode. `backtest` writes `reports/backtest.json` and `reports/backtest.md`.
+`train` writes a timestamped `data/models/suite-<UTC timestamp>.joblib` and a `.manifest.json` sidecar. `model-check --model <path>` validates the runtime artifact. `backtest` writes `reports/backtest.json` and `reports/backtest.md`; it replays held-out evaluation probabilities only.
 
 ### 8. Run the tests
 
@@ -103,7 +103,7 @@ Inputs may be `.csv`, `.jsonl`, or `.parquet`; the default is `data/ticks.csv`. 
 .\.venv\Scripts\python.exe runner.py docs-check
 ```
 
-The first command runs the 121 unit tests. The second validates documentation status labels, links, and index coverage. Once the hooks are installed, the commit-time check runs automatically.
+The first command runs the unit suite. The second validates documentation status labels, links, and index coverage. Once the hooks are installed, the commit-time check runs automatically.
 
 ### 9. Stop capture
 
@@ -115,12 +115,17 @@ Press `Ctrl+C` in the receiver terminal.
 IQ Option Traderoom (browser)
     -> chrome-extension/inject.js        observe WebSocket, filter candle-generated
     -> chrome-extension/content.js       forward to ws://localhost:8765
-    -> components/receiver.py            validate, stamp received_at, buffer, sink
-    -> data/raw/ticks-YYYY-MM-DD.jsonl
-    -> runner.py build
-    -> engine.store.TickStore            ordered, deduplicated, point-in-time
-    -> engine.sampler                    continuity gate, delayed entry, exits
-    -> engine.features                   core16-v1 + amt-v3
+    -> components/receiver.py            validate, stamp received_at, buffer
+    -> engine.stream.StreamStore         events/candles, sequence, gaps, persistence
+    -> candle-close RuntimeEngine        core16-v2 / amt-v4, .joblib inference
+    -> deterministic EV router           paper proposal or no-trade
+    -> decision and trade journals       JSONL
+
+Offline research remains available:
+    -> CSV / JSONL / Parquet
+    -> engine.store.TickStore            batch table, stable timestamp/sequence order
+    -> engine.sampler                    candle-close snapshots, delayed entry, labels
+    -> engine.features                   core16-v2 + amt-v4
     -> engine.domain.labels              snapshot-horizon-v1
     -> data/dataset.parquet
     -> engine.models                     four calibrated horizon classifiers
@@ -135,12 +140,12 @@ IQ Option Traderoom (browser)
 
 ```text
 iqoption-bot/
-├── runner.py               # serve / build / train / backtest / diagnose
+├── runner.py               # serve / build / train / backtest / model-check / replay / diagnose
 ├── config/default.toml     # Active configuration
 ├── components/receiver.py  # Tick capture
-├── engine/                 # Store, sampler, features, models, router, execution
+├── engine/                 # Store, stream runtime, sampler, features, models, router, execution
 ├── chrome-extension/       # MV3 capture extension
-├── tests/                  # 121 unit tests
+├── tests/                  # Unit tests for offline and streaming paths
 ├── tools/                  # Docs checker and hook installer
 ├── .githooks/              # Versioned pre-commit hook
 └── docs/                   # Documentation tree
@@ -154,16 +159,17 @@ iqoption-bot/
 - [RUNBOOK.md](RUNBOOK.md) — operating capture, build, train, and backtest
 - [docs/system/01_OVERVIEW.md](docs/system/01_OVERVIEW.md) — current architecture and scope
 - [docs/system/11_RUNTIME_AND_ENTRYPOINT.md](docs/system/11_RUNTIME_AND_ENTRYPOINT.md) — every command and output
+- [docs/system/16_STREAMING_RUNTIME_AND_STORE.md](docs/system/16_STREAMING_RUNTIME_AND_STORE.md) — current streaming/runtime contract
 - [docs/data/01_TICK_STREAM.md](docs/data/01_TICK_STREAM.md) — what a tick means here
 - [docs/planning.md](docs/planning.md) — roadmap and phases
 - [docs/system/10_LIMITATIONS_AND_BACKLOG.md](docs/system/10_LIMITATIONS_AND_BACKLOG.md) — what to improve next
 
 ## Roadmap Summary
 
-1. Harden tick capture: verify frame semantics, add quality counters, move receiver constants into configuration.
-2. Trust the data: measure real tick cadence, record sessions and gaps, persist snapshots.
-3. Validate honestly: real multi-day captures, a rule-based baseline, per-fold and per-session reporting.
-4. Only then: risk controls, paper loop, demo adapter, operations.
+1. Verify frame semantics, measure real tick cadence, and improve session/reconnect observability.
+2. Validate the candle-close path on independent real captures and compare it with rule-based baselines.
+3. Improve reporting, replay/recovery evidence, and operational procedures.
+4. Evaluate a learned selector separately; keep paper-only execution until all evidence and safety gates are met.
 
 ## Safety
 
@@ -186,4 +192,4 @@ Import `engine` before `pandas`/`pyarrow` in any script. The package imports Lig
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

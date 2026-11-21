@@ -113,7 +113,7 @@ For a `put`, the stored probability is `1 - q`, so it always describes the chose
 - It does not blend horizons into a single score.
 - It does not trade a horizon the model suite skipped.
 
-Keeping the router pure means the backtest and any future live path apply exactly the same decision rule.
+Keeping the router pure means the backtest and candle-close runtime apply the same selection rule; runtime safety gates remain outside the router.
 
 ---
 
@@ -148,4 +148,4 @@ If no other horizon clears the hurdle, the proposal is `selected` at 180s. If th
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

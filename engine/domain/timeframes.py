@@ -20,6 +20,7 @@ class Tick:
     timestamp: datetime
     price: float
     active_id: int | None = None
+    sequence: int | None = None
 
     @property
     def epoch(self) -> float:

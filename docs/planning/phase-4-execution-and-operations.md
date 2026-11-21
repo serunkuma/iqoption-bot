@@ -2,16 +2,16 @@
 
 Status: Planning
 
-> **Objective:** Add validated runtime ML inference and signal selection, then paper execution, hard risk controls, monitoring, and operational procedures. Demo/live execution is a separate, explicit decision.
+> **Objective:** Evaluate a learned signal selector against deterministic EV routing, validate sustained paper runtime behavior, and define remaining risk/operations gates. Demo/live execution is a separate, explicit decision.
 
-> **State:** An in-process paper broker and offline backtest replay exist. There is no runtime feature/model loop, learned signal selector, live paper loop, demo adapter, complete risk layer, or kill switch.
+> **State:** Candle-close runtime inference, manifest-validated `.joblib` loading, paper decisions, basic runtime gates, and decision/trade JSONL journals are implemented. The learned selector, sustained independent-feed validation, demo adapter, complete risk layer, and kill switch remain open. See [Streaming Runtime and Store](../system/16_STREAMING_RUNTIME_AND_STORE.md).
 
 ---
 
 ## Scope
 
 - Paper trading first.
-- Runtime model loading and inference, using a versioned `.joblib` artifact.
+- Runtime artifact validation and inference parity on independent captures.
 - Evaluate a learned direction/horizon/no-trade selector against the existing deterministic EV router.
 - Shadow predictions before any paper orders; retain deterministic payout/risk/execution hard gates.
 - Demo-account execution second.
@@ -32,20 +32,20 @@ Status: Planning
 - [x] Enforce a one-open-trade limit.
 - [x] Void ties instead of mapping them to a direction.
 - [x] Replay the paper broker over held-out probabilities.
-- [ ] Implement a live paper loop that consumes new snapshots.
-- [ ] Persist every paper trade and its reason from the live loop.
+- [x] Implement a candle-close paper runtime that consumes new completed candles.
+- [x] Persist runtime paper decisions, trades, and outcomes to JSONL.
 - [ ] Compare live paper results with offline backtest results.
 
 ### Runtime inference and selection
 
 - [ ] Define the selector's outcome target, candidate inputs, and model scope.
-- [ ] Define a versioned `.joblib` artifact and compatibility manifest, including ordered feature and target versions.
-- [ ] Load only an explicitly selected, trusted artifact; verify compatibility before inference.
-- [ ] Fail closed for ML proposals when the configured artifact is missing or incompatible; report an explicit diagnostic.
-- [ ] Build live feature values from the same causal, versioned contract used for training.
+- [x] Define a versioned `.joblib` artifact and compatibility manifest, including ordered features and model contract versions.
+- [x] Load a trusted artifact and verify compatibility before inference.
+- [x] Fail closed when the configured artifact is missing or incompatible; report an explicit diagnostic.
+- [x] Build live feature values from the same causal, versioned contract used for training.
 - [ ] Run the learned selector in shadow mode and compare decisions with the current EV router on the same incoming snapshots.
 - [ ] Promote to live paper only after a predeclared validation gate passes; do not train or replace the active model silently during a session.
-- [ ] Log model/artifact version, feature version, selector output, deterministic gates, and abstention reasons.
+- [x] Log model/artifact version, feature/decision versions, deterministic gates, and abstention reasons.
 
 ### Demo execution
 
@@ -60,7 +60,7 @@ Status: Planning
 - [x] Implement a fixed stake.
 - [x] Implement a maximum open-trade count.
 - [ ] Implement a maximum stake policy beyond a single value.
-- [ ] Implement a daily loss limit.
+- [x] Implement a daily realized-loss limit for runtime paper decisions.
 - [ ] Implement a maximum consecutive-loss limit.
 - [ ] Implement exposure limits.
 - [ ] Implement a manual kill switch.
@@ -70,7 +70,7 @@ Status: Planning
 ### Journal and audit
 
 - [x] Provide a JSONL trade journal writer.
-- [ ] Wire the journal into the backtest and the live loop.
+- [x] Wire decision and trade journals into the streaming paper runtime.
 - [ ] Persist signals, risk decisions, orders, fills, outcomes, and PnL.
 - [ ] Record model and feature versions per trade.
 - [ ] Record payout and expiry per trade.
@@ -97,8 +97,8 @@ Status: Planning
 ## Deliverables
 
 - Paper execution adapter.
-- Versioned runtime model loader and learned-selector evaluation.
-- Live feature/inference shadow and paper loop.
+- Candle-close runtime inference, validated artifact loader, and paper decision loop (implemented).
+- Learned-selector evaluation and sustained shadow/paper evidence (open).
 - Demo execution adapter.
 - Risk manager and kill switch.
 - Trade journal.
@@ -145,4 +145,4 @@ Status: Planning
 
 ---
 
-*Last updated: 2026-11-20*
+*Last updated: 2026-11-21*

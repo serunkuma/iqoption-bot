@@ -17,9 +17,7 @@ def stub_snapshot(entry_price: float = 1.0, snapshot_id: int = 0, offset: int = 
         snapshot_id=snapshot_id,
         active_id=0,
         snapshot_time=entry,
-        forming_start=entry,
         completed_bars=(),
-        forming_bar=None,  # type: ignore[arg-type]
         price=entry_price,
         window_ticks=0,
         entry_timestamp=entry,

@@ -12,10 +12,12 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-FEATURE_VERSION = "amt-v3"
-CORE_FEATURE_VERSION = "core16-v1"
+FEATURE_VERSION = "amt-v4"
+CORE_FEATURE_VERSION = "core16-v2"
 LABEL_VERSION = "snapshot-horizon-v1"
 CANDLE_VERSION = "1m-clock-v1"
+DECISION_VERSION = "candle-close-v1"
+MODEL_FORMAT_VERSION = "joblib-v1"
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "default.toml"
 
@@ -51,7 +53,13 @@ class ContextConfig:
 
 @dataclass(frozen=True)
 class SnapshotConfig:
-    offsets_seconds: tuple[int, ...] = (30,)
+    """Candle-close decision timing.
+
+    Decisions occur at the close of a completed minute. ``offsets_seconds`` is
+    deliberately absent: the intra-minute mode was removed in the streaming
+    redesign, so there is exactly one decision cadence.
+    """
+
     entry_delay_ms: int = 250
     entry_tolerance_seconds: float = 1.0
     exit_tolerance_seconds: float = 5.0
@@ -95,6 +103,7 @@ class ModelConfig:
     learning_rate: float = 0.03
     num_leaves: int = 15
     min_child_samples: int = 50
+    runtime_path: str = "data/models/suite.joblib"
 
 
 @dataclass(frozen=True)
@@ -102,6 +111,25 @@ class ExecutionConfig:
     mode: str = "paper"
     stake: float = 1.0
     max_open_trades: int = 1
+    cooldown_seconds: int = 0
+    daily_loss_limit: float | None = 5.0
+
+
+@dataclass(frozen=True)
+class StreamConfig:
+    root: str = "data/stream"
+    rotation_seconds: int = 3600
+    flush_events: int = 500
+    compression: str = "zstd"
+    max_buffer_events: int = 50000
+
+    @property
+    def decisions_dir(self) -> str:
+        return f"{self.root}/decisions"
+
+    @property
+    def state_file(self) -> str:
+        return f"{self.root}/state.json"
 
 
 @dataclass(frozen=True)
@@ -128,12 +156,15 @@ class Config:
     router: RouterConfig = field(default_factory=RouterConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    stream: StreamConfig = field(default_factory=StreamConfig)
     store: StoreConfig = field(default_factory=StoreConfig)
     data: DataConfig = field(default_factory=DataConfig)
     feature_version: str = FEATURE_VERSION
     core_feature_version: str = CORE_FEATURE_VERSION
     label_version: str = LABEL_VERSION
     candle_version: str = CANDLE_VERSION
+    decision_version: str = DECISION_VERSION
+    model_format_version: str = MODEL_FORMAT_VERSION
 
 
 def _build_section(cls: type, raw: Any, name: str) -> Any:
@@ -196,16 +227,6 @@ def _validate(config: Config) -> None:
         raise ConfigError("context.epsilon must be positive")
 
     snapshot = config.snapshot
-    if not snapshot.offsets_seconds:
-        raise ConfigError("snapshot.offsets_seconds must not be empty")
-    interval = config.candles.interval_seconds
-    for offset in snapshot.offsets_seconds:
-        if not 0 <= offset < interval:
-            raise ConfigError(
-                f"snapshot offset {offset} must be in [0, {interval}) seconds"
-            )
-    if len(set(snapshot.offsets_seconds)) != len(snapshot.offsets_seconds):
-        raise ConfigError("snapshot.offsets_seconds must be unique")
     if snapshot.entry_delay_ms < 0:
         raise ConfigError("snapshot.entry_delay_ms must be non-negative")
     if snapshot.entry_tolerance_seconds < 0:
@@ -257,6 +278,8 @@ def _validate(config: Config) -> None:
         raise ConfigError("models.n_splits must be at least 2")
     if models.min_train_rows < 1:
         raise ConfigError("models.min_train_rows must be at least 1")
+    if not models.runtime_path:
+        raise ConfigError("models.runtime_path must not be empty")
 
     execution = config.execution
     if execution.mode not in {"paper", "demo", "live"}:
@@ -265,6 +288,29 @@ def _validate(config: Config) -> None:
         raise ConfigError("execution.stake must be positive")
     if execution.max_open_trades < 1:
         raise ConfigError("execution.max_open_trades must be at least 1")
+    if execution.cooldown_seconds < 0:
+        raise ConfigError("execution.cooldown_seconds must be non-negative")
+    if execution.daily_loss_limit is not None and execution.daily_loss_limit <= 0:
+        raise ConfigError("execution.daily_loss_limit must be positive or null")
+
+    stream = config.stream
+    if not stream.root:
+        raise ConfigError("stream.root must not be empty")
+    interval = config.candles.interval_seconds
+    if stream.rotation_seconds < interval:
+        raise ConfigError("stream.rotation_seconds must be at least one candle")
+    if stream.rotation_seconds % interval != 0:
+        raise ConfigError(
+            "stream.rotation_seconds must be a multiple of candles.interval_seconds"
+        )
+    if stream.flush_events < 1:
+        raise ConfigError("stream.flush_events must be at least 1")
+    if stream.max_buffer_events < stream.flush_events:
+        raise ConfigError("stream.max_buffer_events must be at least stream.flush_events")
+    if stream.compression not in {"zstd", "snappy", "gzip", "none"}:
+        raise ConfigError(
+            "stream.compression must be 'zstd', 'snappy', 'gzip', or 'none'"
+        )
 
 
 def _read(path: str | Path | None) -> dict[str, Any]:
@@ -285,8 +331,6 @@ def load_config(path: str | Path | None = None) -> Config:
         labels_raw["horizons_seconds"] = tuple(labels_raw["horizons_seconds"])
 
     snapshot_raw = dict(raw.get("snapshot", {}))
-    if "offsets_seconds" in snapshot_raw:
-        snapshot_raw["offsets_seconds"] = tuple(snapshot_raw["offsets_seconds"])
 
     router_raw = dict(raw.get("router", {}))
     if "payouts" in router_raw:
@@ -301,6 +345,7 @@ def load_config(path: str | Path | None = None) -> Config:
         router=_build_section(RouterConfig, router_raw, "router"),
         models=_build_section(ModelConfig, raw.get("models"), "models"),
         execution=_build_section(ExecutionConfig, raw.get("execution"), "execution"),
+        stream=_build_section(StreamConfig, raw.get("stream"), "stream"),
         store=_build_section(StoreConfig, raw.get("store"), "store"),
         data=_build_section(DataConfig, raw.get("data"), "data"),
     )

@@ -13,9 +13,9 @@ Status: Current
 | Config file | `config/default.toml` |
 | Override | `runner.py --config <path>` |
 
-`load_config` reads the file with `tomllib`, builds typed dataclasses, and validates them. `ConfigError` is raised for a missing file, an unknown key, a wrong type, a duplicate offset, an out-of-range value, or an inconsistent pair such as a payout for a horizon without labels.
+`load_config` reads the file with `tomllib`, builds typed dataclasses, and validates them. `ConfigError` is raised for a missing file, an unknown key, a wrong type, an out-of-range value, or an inconsistent pair such as a payout for a horizon without labels. Snapshot timing has one candle-close cadence; there is no offset list.
 
-There are no environment-variable overrides yet. CLI flags override only the per-command arguments (`--input`, `--dataset`, `--model`, `--host`, `--port`, `--raw-dir`).
+There are no environment-variable overrides yet. CLI flags override only per-command arguments such as `--input`, `--dataset`, `--model`, `--host`, `--port`, `--stream-dir`, and `--capture-only`.
 
 `config_hash(config)` serialises every field, sorts keys, and returns the first 16 hex characters of a SHA-256 digest. It is recorded in the build summary and on the model suite.
 
@@ -59,7 +59,7 @@ Changing the interval changes the meaning of `macro_candles`, `fast_candles`, an
 | `volatility_min_changes` | `10` | At least 1 |
 | `epsilon` | `1e-9` | Positive; reserved for numerical guards |
 
-The macro window supplies the profile and `sigma_7`; the fast window supplies recent activity; the forming bar supplies the current state. See [TPO and Value Area](../data/04_TPO_VALUE_AREA.md) and [Model inputs](../data/09_MODEL_INPUTS.md).
+The macro window supplies the profile and `sigma_7`; the fast window supplies recent activity; the last completed candle supplies the most recent activity values. The forming candle is excluded from the feature vector. See [TPO and Value Area](../data/04_TPO_VALUE_AREA.md) and [Model inputs](../data/09_MODEL_INPUTS.md).
 
 ---
 
@@ -67,13 +67,12 @@ The macro window supplies the profile and `sigma_7`; the fast window supplies re
 
 | Key | Default | Validation |
 |-----|---------|------------|
-| `offsets_seconds` | `[30]` | Non-empty, unique, each in `[0, interval_seconds)` |
 | `entry_delay_ms` | `250` | Non-negative |
 | `entry_tolerance_seconds` | `1.0` | Non-negative |
 | `exit_tolerance_seconds` | `5.0` | Non-negative |
 | `min_ticks_per_bar` | `1` | At least 1 |
 
-Multiple offsets produce multiple snapshots per minute, for example `[0, 20, 40]`. That multiplies rows and label overlap, so the overlap weights in training become more important.
+Offline sampling produces at most one snapshot per eligible minute at candle close. The runtime decision is triggered when the first event in a later minute closes the preceding candle. `entry_delay_ms`, entry tolerance, and exit tolerance apply after that close.
 
 Raising `min_ticks_per_bar` trades data volume for density confidence. The default accepts any non-empty completed bar; a real capture should probably use a higher value once tick cadence is known.
 
@@ -129,6 +128,7 @@ Payouts are configured, not scraped. They must be updated when the platform chan
 | `learning_rate` | `0.03` | Any positive float |
 | `num_leaves` | `15` | Any positive integer |
 | `min_child_samples` | `50` | Any positive integer |
+| `runtime_path` | `"data/models/suite.joblib"` | Required configured runtime artifact path |
 
 `calibration = "auto"` selects isotonic when the calibration slice has at least 500 rows and Platt otherwise. A non-increasing Platt fit is rejected regardless of this setting.
 
@@ -143,8 +143,24 @@ Payouts are configured, not scraped. They must be updated when the platform chan
 | `mode` | `"paper"` | `paper`, `demo`, or `live` |
 | `stake` | `1.0` | Positive |
 | `max_open_trades` | `1` | At least 1 |
+| `cooldown_seconds` | `0` | Non-negative pause after a paper trade resolves |
+| `daily_loss_limit` | `5.0` | Positive realized-loss limit, or `null` to disable |
 
-`demo` and `live` validate but raise `ExecutionError` when the broker is constructed. The configuration accepts the vocabulary so a future adapter can be specified; no adapter ships.
+The runtime paper engine applies the one-open-trade, cooldown, and daily realized-loss gates. `demo` and `live` validate but raise `ExecutionError` when the broker is constructed; no order adapter ships.
+
+---
+
+## `[stream]`
+
+| Key | Default | Validation / behavior |
+|-----|---------|-----------------------|
+| `root` | `"data/stream"` | Required non-empty store root |
+| `rotation_seconds` | `3600` | Positive multiple of `candles.interval_seconds`; hourly paths are currently fixed |
+| `flush_events` | `500` | At least 1 event before a count-based flush |
+| `compression` | `"zstd"` | `zstd`, `snappy`, `gzip`, or `none` |
+| `max_buffer_events` | `50000` | At least `flush_events`; exceeding the limit fails ingestion |
+
+`decisions_dir` and `state_file` are derived from `root`; they are not TOML keys.
 
 ---
 
@@ -189,10 +205,12 @@ The capture component still uses module constants rather than the TOML file:
 
 | Constant | Value | Scope |
 |----------|-------|-------|
-| `FEATURE_VERSION` | `amt-v3` | Full diagnostic table |
-| `CORE_FEATURE_VERSION` | `core16-v1` | Model inputs |
+| `FEATURE_VERSION` | `amt-v4` | Full diagnostic table |
+| `CORE_FEATURE_VERSION` | `core16-v2` | Model inputs |
 | `LABEL_VERSION` | `snapshot-horizon-v1` | Labels |
 | `CANDLE_VERSION` | `1m-clock-v1` | Minute bucketing |
+| `DECISION_VERSION` | `candle-close-v1` | Decision cadence |
+| `MODEL_FORMAT_VERSION` | `joblib-v1` | Runtime model serialization |
 
 These are not configurable. Changing a definition requires a code change and a version bump, so an artefact can always be traced to the code that produced it.
 
@@ -215,4 +233,4 @@ These are not configurable. Changing a definition requires a code change and a v
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

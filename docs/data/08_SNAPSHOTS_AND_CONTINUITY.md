@@ -2,7 +2,7 @@
 
 Status: Current
 
-> A snapshot is the only evaluation point the engine recognises. The sampler verifies that the seven preceding 1-minute bars exist and are contiguous, freezes the feature slice at the snapshot time, and attaches a delayed entry price plus one exit outcome per horizon.
+> A snapshot is the offline representation of a candle-close decision point. The sampler verifies that the required completed 1-minute bars exist and are contiguous, freezes that causal feature window, and attaches a delayed entry price plus one exit outcome per horizon.
 
 ---
 
@@ -10,61 +10,37 @@ Status: Current
 
 Predicting every tick would create thousands of near-identical rows per minute, each with an overlapping outcome window. That inflates row counts without adding information and makes the training set dominated by whichever microsecond the engine happened to sample.
 
-Snapshots instead define a small, fixed set of decision points:
+Snapshots define at most one decision point per eligible minute. Decisions occur at candle close; the runtime triggers when the first event in a later minute finalizes the previous candle.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
-| `snapshot.offsets_seconds` | `[30]` | Offset inside each forming minute |
 | `snapshot.entry_delay_ms` | `250` | Delay between decision and entry |
 | `snapshot.entry_tolerance_seconds` | `1.0` | How late the entry tick may be |
 | `snapshot.exit_tolerance_seconds` | `5.0` | How late the exit tick may be |
 | `snapshot.min_ticks_per_bar` | `1` | Minimum ticks in each completed bar |
 
-Offsets may be a list, so `[0, 20, 40]` produces three snapshots per minute. Each offset must be inside `[0, interval_seconds)` and the list must be unique.
-
 ---
 
 ## The Continuity Gate
 
-For every whole minute that contains ticks, in ascending order, the sampler builds a snapshot only when all of the following hold:
+For every complete minute, in ascending order, the sampler builds a snapshot only when all of the following hold:
 
-1. At least `context.macro_candles` earlier minutes exist.
-2. The last `macro_candles` minutes are exactly `key - macro ... key - 1` — no missing minute.
+1. At least `context.macro_candles` completed minutes exist through the decision candle.
+2. The last `macro_candles` minutes are exactly `key - macro + 1 ... key` — no missing minute.
 3. Every completed bar in that window has at least `min_ticks_per_bar` ticks.
-4. At least one tick exists at or before the snapshot offset inside the forming minute.
-5. An entry tick exists within `entry_delay + entry_tolerance`.
+4. An entry tick exists within `entry_delay + entry_tolerance` after the candle close.
 
 Failure at any step increments a specific counter and moves on. The engine never fills a gap, interpolates a bar, or synthesises a price.
 
-### The Forming Minute
-
-The forming minute is **never** part of the profile or volatility window. It contributes only:
-
-- the current price — the last tick at or before the snapshot time,
-- forming tick rate, price speed, range, and price change,
-- the entry and exit lookups.
-
-Completed bars are the `macro_candles` minutes before the forming minute. The fast window is the last `fast_candles` of those completed bars.
-
----
-
-## Causality Slice
-
-The forming bar is truncated at the snapshot time:
-
-```text
-limit = searchsorted(epochs, snapshot_epoch, side="right")
-forming_bar = ticks[forming_start:limit]
-```
-
-`side="right"` includes a tick exactly at the snapshot time and excludes everything after it. This is the only place the feature slice is cut, and it happens before any feature is computed.
+The decision candle is included among the `macro_candles` completed bars. No forming candle or later event enters the feature window. The fast window is the last `fast_candles` of those completed bars. In streaming mode, the next accepted event finalizes the preceding candle; the empty next minute is not synthesized.
 
 ---
 
 ## Delayed Entry
 
 ```text
-entry_target = snapshot_epoch + entry_delay
+decision_epoch = (decision_bucket + 1) * interval_seconds
+entry_target = decision_epoch + entry_delay
 entry_index  = searchsorted(epochs, entry_target, side="left")   # first >= target
 entry_tick   = epochs[entry_index]  if entry_tick <= entry_target + entry_tolerance
 ```
@@ -106,18 +82,17 @@ If any horizon is missing, the snapshot is still emitted and counted in `snapsho
 |-------|---------|
 | `snapshot_id` | Monotonic id in build order |
 | `active_id` | Instrument |
-| `snapshot_time` | Decision time `forming_start + offset` |
-| `forming_start` | Start of the forming minute |
+| `snapshot_time` | Decision time at the end of the last completed candle |
 | `completed_bars` | The `macro_candles` completed bars |
-| `forming_bar` | Truncated forming bar |
-| `price` | Last price at or before the snapshot time |
+| `decision_version` | `candle-close-v1` |
+| `price` | Close of the last completed candle |
 | `window_ticks` | Ticks in the completed macro window |
 | `entry_timestamp`, `entry_price` | Delayed entry |
 | `entry_delay_seconds` | Realised delay |
 | `outcomes` | Horizon to `HorizonOutcome` |
 | `utc_offset_seconds` | Original capture offset for local-time features |
 
-`contiguous` is a property of the completed bars plus the forming bar: the keys must form one unbroken run ending immediately before the forming minute.
+`contiguous` is a property of the completed bars: their bucket keys must form an unbroken run.
 
 ---
 
@@ -130,7 +105,6 @@ If any horizon is missing, the snapshot is still emitted and counted in `snapsho
 | `skipped_insufficient_history` | Fewer than `macro_candles` earlier minutes |
 | `skipped_gap` | A minute is missing inside the macro window |
 | `skipped_sparse_bar` | A completed bar has fewer than `min_ticks_per_bar` ticks |
-| `skipped_no_pre_offset_tick` | No tick at or before the offset |
 | `skipped_no_entry_tick` | No entry tick inside the tolerance |
 | `snapshots_with_missing_exits` | At least one horizon has no exit |
 
@@ -148,15 +122,15 @@ This is how single-instrument operation is enforced: feature windows can never m
 
 ## Worked Example
 
-Capture starts at `12:00`. `macro_candles = 7`, offset `30`, horizon `60`.
+Capture starts at `12:00`. `macro_candles = 7`, horizon `60`.
 
 | Minute | Result |
 |--------|--------|
-| 12:00–12:06 | `skipped_insufficient_history` (7 needed before the forming minute) |
-| 12:07 | Snapshot at `12:07:30`, if bars `12:00`–`12:06` are contiguous and dense enough |
-| 12:08 | Snapshot at `12:08:30`, window `12:01`–`12:07` |
+| 12:00–12:05 | Insufficient history to form seven completed candles |
+| 12:06 close | Decision point using candles `12:00`–`12:06`, if contiguous and dense enough |
+| 12:07 close | Decision point using candles `12:01`–`12:07` |
 
-A snapshot at `12:07:30` with entry at `12:07:30.31` expires at `12:08:30.31`; the exit is the first tick at or after that time, within 5 seconds.
+The `12:06` candle is finalized by the first event in the next minute. With a 250 ms entry delay and a fill at `12:07:00.31`, a 60-second horizon expires at `12:08:00.31`; the exit is the first tick at or after that time, within 5 seconds.
 
 ---
 
@@ -165,8 +139,8 @@ A snapshot at `12:07:30` with entry at `12:07:30.31` expires at `12:08:30.31`; t
 - The continuity gate checks presence, not tick density quality beyond `min_ticks_per_bar`.
 - A bar with exactly `min_ticks_per_bar` ticks is accepted; there is no upper-level quality score.
 - Entry and exit tolerances are global, not per instrument or session.
-- Snapshot offsets are fixed per minute; there is no event-driven trigger.
-- The sampler is batch-only; live snapshots are not produced.
+- The runtime does not fabricate a close while the feed is idle; a decision waits for the next event.
+- The runtime feature window warms up after restart and after a gap; it is not reconstructed from historical candle parts.
 
 ---
 
@@ -179,4 +153,4 @@ A snapshot at `12:07:30` with entry at `12:07:30.31` expires at `12:08:30.31`; t
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*

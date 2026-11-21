@@ -150,6 +150,19 @@ class PaperBroker:
 
         self._outcome_lookup[snapshot.snapshot_id] = snapshot.outcomes
 
+    def realized_pnl(self, on_date=None) -> float:
+        """Sum resolved PnL, optionally limited to one UTC date."""
+
+        total = 0.0
+        for trade in self.trades:
+            if trade.pnl is None:
+                continue
+            if on_date is not None:
+                if trade.resolved_at is None or trade.resolved_at.date() != on_date:
+                    continue
+            total += trade.pnl
+        return total
+
     # -- reporting -------------------------------------------------------
     def summary(self) -> dict[str, float | int]:
         closed = [trade for trade in self.trades if trade.status != OPEN]

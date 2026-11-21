@@ -2,14 +2,14 @@
 
 Status: Current
 
-> **Scope:** This runbook covers capture, build, train, backtest, and diagnose. There is no trading procedure because the project cannot place trades. Execution is paper-only inside the backtest.
+> **Scope:** This runbook covers streaming capture, offline build/train/backtest, runtime model checks, and replay. `serve` can record runtime paper decisions, but the project has no broker order path.
 
 ---
 
 ## Core Rules
 
 1. **Documentation is authority.** Read `AGENTS.md` before changing or operating the system.
-2. **Do not trade real money.** There is no execution adapter, no risk manager, and no kill switch.
+2. **Do not trade real money.** Runtime is paper-only; there is no broker adapter, complete risk manager, or kill switch.
 3. **Check the status label.** Only follow docs marked `Status: Current`.
 4. **Use the virtual environment.** Do not run bare `python`.
 5. **Import `engine` before `pandas`.** See the LightGBM caveat below.
@@ -35,28 +35,27 @@ Test-Path .\.venv\Scripts\python.exe
 .\.venv\Scripts\python.exe tools\install_hooks.py --status
 ```
 
-### 2. Start capture
+### 2. Start streaming capture
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py serve
+.\.venv\Scripts\python.exe runner.py serve --capture-only
 ```
 
 Expected log lines include:
 
 ```text
-Persisting accepted ticks to data/raw
 Listening for tick data on ws://localhost:8765
 ```
 
-`serve` captures only. It does not produce candles, features, or signals.
+`--capture-only` persists accepted events and completed candles under `data\stream\` without loading a model. Without this flag, `serve` requires a compatible `.joblib` artifact and records candle-close paper decisions. It never places broker orders.
 
 Optional overrides:
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py serve --host localhost --port 8766 --raw-dir ''
+.\.venv\Scripts\python.exe runner.py serve --host localhost --port 8766 --stream-dir data\stream-test --capture-only
 ```
 
-`--raw-dir ''` disables persistence for a capture-only session.
+Use `--model <path>` to select a runtime artifact explicitly. `--stream-dir` changes the stream store root.
 
 ### 3. Open IQ Option
 
@@ -72,12 +71,12 @@ Watch for lines containing:
 asset=... active_id=... close=... open=... min=... max=... volume=... at=...
 ```
 
-If prices match the platform, capture is working. Accepted ticks are appended to `data/raw/ticks-YYYY-MM-DD.jsonl`.
+If prices match the platform, capture is working. Accepted events and finalized candles are persisted in hourly Parquet parts; the forming candle is not force-finalized on shutdown.
 
 ### 5. Diagnose the capture
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py diagnose --input data\raw\ticks-2026-11-18.jsonl
+.\.venv\Scripts\python.exe runner.py diagnose --input data\ticks.csv
 ```
 
 Check:
@@ -85,15 +84,17 @@ Check:
 | Output | Suspicious when |
 |--------|-----------------|
 | `rows` | Very small for the session length |
-| `duplicates dropped` | Large relative to rows |
+| `duplicate timestamp/price pairs` | Large relative to rows; duplicates are preserved, not removed |
 | `out-of-order rows` | Non-zero and growing |
 | `span seconds` | Shorter than the session |
 | `minutes with ticks` | Noticeably fewer than the span in minutes |
 
+`diagnose` reads a `.csv`, `.jsonl`, or `.parquet` file; it does not take a stream directory. Use `replay` to compare persisted stream events and candles.
+
 ### 6. Build the dataset
 
 ```powershell
-.\.venv\Scripts\python.exe runner.py build --input data\raw\ticks-2026-11-18.jsonl
+.\.venv\Scripts\python.exe runner.py build --input data\ticks.csv
 ```
 
 The build summary reports:
@@ -101,7 +102,7 @@ The build summary reports:
 | Field | Meaning |
 |-------|---------|
 | `ticks` | Rows in the tick store |
-| `duplicates_dropped` | Exact duplicates removed |
+| `duplicate_rows` | Exact duplicate timestamp/price pairs observed; events are preserved |
 | `out_of_order` | Rows that arrived out of order |
 | `snapshots` | Snapshots that passed the continuity gate |
 | `feature_rows` | One row per snapshot |
@@ -113,7 +114,6 @@ The build summary reports:
 | `skipped_insufficient_history` | Fewer than seven completed bars |
 | `skipped_gap` | A minute is missing inside the macro window |
 | `skipped_sparse_bar` | A completed bar has too few ticks |
-| `skipped_no_pre_offset_tick` | No tick at or before the snapshot offset |
 | `skipped_no_entry_tick` | No entry tick inside the delay plus tolerance |
 | `snapshots_with_missing_exits` | At least one horizon has no exit tick |
 
@@ -127,7 +127,7 @@ A high `skipped_gap` means the capture has holes. A high `skipped_no_entry_tick`
 .\.venv\Scripts\python.exe runner.py train
 ```
 
-Writes `data/models/suite.pkl` plus a dated copy `suite-YYYYMMDDTHHMMSSZ.pkl`.
+Writes `data/models/suite-<UTC timestamp>.joblib` plus a `.manifest.json` sidecar. It does not automatically promote the artifact to the configured runtime path.
 
 Read the per-horizon line carefully:
 
@@ -137,7 +137,13 @@ horizon   60s  rows=... oos=... eval=... brier=... auc=... cal=...
 
 - `eval` is the held-out evaluation slice. If it is very small, the metrics are noise.
 - `cal=none` with a note means the Platt fit was rejected as non-increasing and identity calibration shipped. That is an honest failure, not a bug.
-- `skipped <h>s : too few rows` means that horizon has no model and will always be a no-trade in the backtest.
+- A horizon skipped for insufficient/one-class rows has no model; those candidate probabilities are unavailable.
+
+Validate a candidate artifact before runtime use:
+
+```powershell
+.\.venv\Scripts\python.exe runner.py model-check --model data\models\suite-<UTC timestamp>.joblib
+```
 
 ### 8. Backtest
 
@@ -161,7 +167,7 @@ Summary keys:
 | `pnl` | Sum of realised PnL at fixed stake |
 | `win_rate` | Wins divided by closed trades |
 
-`skipped_no_model` is normally the largest number. That is correct: only the later 30% of walk-forward out-of-sample rows are replayable.
+`skipped_no_model` is normally large. That is correct: only held-out walk-forward evaluation probabilities are replayable.
 
 ### 9. Run the tests
 
@@ -169,17 +175,19 @@ Summary keys:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
 ```
 
-Expected tail:
+The suite includes streaming, runtime, and offline tests; use the result printed by the current run rather than relying on a copied count.
 
-```text
-Ran 121 tests
+### 10. Replay persisted stream data
 
-OK
+```powershell
+.\.venv\Scripts\python.exe runner.py replay --events data\stream\events --candles data\stream\candles
 ```
 
-### 10. Stop capture
+Replay rebuilds candles from stored events and compares them with recorded candles. It can optionally check feature parity with `--dataset`.
 
-Press `Ctrl+C` in the receiver terminal. Confirm `Receiver stopped.`
+### 11. Stop capture
+
+Press `Ctrl+C` in the receiver terminal. Pending data is flushed, state is saved, and the forming candle is not finalized.
 
 ---
 
@@ -214,7 +222,7 @@ Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue
 **Fix:**
 
 - Stop the other receiver process, or
-- Change `PORT` in `components/receiver.py` and `SERVER_URL` in `chrome-extension/content.js`, then reload the extension.
+- Restart `serve` with `--port 8766`, set `SERVER_URL` to `ws://localhost:8766` in `chrome-extension/content.js`, and reload the extension.
 
 Receiver host and port are still module constants (with CLI overrides); they are not yet in `config/default.toml`.
 
@@ -244,7 +252,7 @@ The receiver ignores frames that are:
 
 Check the receiver console for warnings such as `Ignoring malformed JSON frame.`
 
-A frame can also be accepted at capture time and rejected later at build time: the tick store rejects naive timestamps, non-numeric prices, non-positive prices, and `active_id` mismatches, and it reports the line number.
+A frame can pass the receiver envelope check but fail later store validation: invalid timestamps, non-numeric or non-positive prices, and `active_id` mismatches are rejected by the streaming or batch store.
 
 ---
 
@@ -434,11 +442,13 @@ Before any trading procedure is added:
 | Activate environment | `.\.venv\Scripts\Activate.ps1` |
 | Install dependencies | `py -m pip install -r requirements.txt` |
 | Capture ticks | `.\.venv\Scripts\python.exe runner.py serve` |
-| Capture without persistence | `.\.venv\Scripts\python.exe runner.py serve --raw-dir ''` |
-| Diagnose a capture | `.\.venv\Scripts\python.exe runner.py diagnose --input data\raw\ticks-YYYY-MM-DD.jsonl` |
-| Build store and dataset | `.\.venv\Scripts\python.exe runner.py build --input data\raw\ticks-YYYY-MM-DD.jsonl` |
+| Capture without model decisions | `.\.venv\Scripts\python.exe runner.py serve --capture-only` |
+| Diagnose a file capture | `.\.venv\Scripts\python.exe runner.py diagnose --input data\ticks.csv` |
+| Build store and dataset | `.\.venv\Scripts\python.exe runner.py build --input data\ticks.csv` |
 | Train models | `.\.venv\Scripts\python.exe runner.py train` |
 | Backtest | `.\.venv\Scripts\python.exe runner.py backtest` |
+| Validate model artifact | `.\.venv\Scripts\python.exe runner.py model-check --model data\models\suite-<timestamp>.joblib` |
+| Replay stream candles | `.\.venv\Scripts\python.exe runner.py replay --events data\stream\events --candles data\stream\candles` |
 | Run tests | `.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v` |
 | Check port | `Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue` |
 | Check docs | `.\.venv\Scripts\python.exe runner.py docs-check` |
@@ -459,4 +469,4 @@ Before any trading procedure is added:
 
 ---
 
-*Last updated: 2026-11-19*
+*Last updated: 2026-11-21*
