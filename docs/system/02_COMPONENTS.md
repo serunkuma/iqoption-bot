@@ -14,7 +14,7 @@ Status: Current
 | Local forwarder | `chrome-extension/content.js` | Validate page messages, connect to `ws://localhost:8765`, reconnect every 2s, queue up to 500 messages | interceptor |
 | Tick capture | `components/receiver.py` | Validate the envelope, stamp `received_at`, buffer 500 raw messages per `active_id`, call the tick sink | forwarder |
 | Stream store | `engine/stream/` | Assign sequences, build candles, preserve events, reject late events, persist parts/state | receiver payload, config |
-| Batch tick store | `engine/store.py` | Enforce the tick contract, stable-sort by timestamp/sequence, expose point-in-time lookups | file input |
+| Batch tick store | `engine/store.py` | Enforce the tick contract, stable-sort by timestamp/sequence, expose point-in-time lookups | file or stream event input |
 | Snapshot sampler | `engine/sampler.py` | Build one candle-close snapshot per eligible minute and attach delayed entry/horizon exits | batch store, config |
 | Domain primitives | `engine/domain/` | Minute buckets, TPO profile, and labels | config |
 | Feature engine | `engine/features.py` | Stateless `core16-v2` vector plus `amt-v4` diagnostics | completed-candle window, config |

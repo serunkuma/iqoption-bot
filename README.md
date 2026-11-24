@@ -77,7 +77,7 @@ Watch the receiver console. Each accepted frame logs the asset identity, `close`
 .\.venv\Scripts\python.exe runner.py diagnose --input data\ticks.csv
 ```
 
-`diagnose` reads a `.csv`, `.jsonl`, or `.parquet` file and reports duplicate `(timestamp, price)` pairs, out-of-order rows, sequence range, and time coverage. Streaming files can be reviewed with `replay`.
+`diagnose` reads a `.csv`, `.jsonl`, `.parquet`, or stream events directory and reports duplicate `(timestamp, price)` pairs, out-of-order rows, sequence range, and time coverage. Streaming files can be reviewed with `replay`.
 
 ### 6. Build the dataset
 
@@ -85,7 +85,7 @@ Watch the receiver console. Each accepted frame logs the asset identity, `close`
 .\.venv\Scripts\python.exe runner.py build --input data\ticks.csv
 ```
 
-Inputs may be `.csv`, `.jsonl`, or `.parquet`; the default is `data/ticks.csv`. Outputs are `data/ticks.parquet`, `data/features.parquet`, `data/labels.parquet`, and `data/dataset.parquet`. The command prints a build summary with snapshot exclusions and the artifact paths.
+Inputs may be `.csv`, `.jsonl`, `.parquet`, or a stream events directory such as `data\stream\events`; the default is `data/ticks.csv`. Outputs are `data/ticks.parquet`, `data/features.parquet`, `data/labels.parquet`, and `data/dataset.parquet`. The command prints a build summary with snapshot exclusions and the artifact paths.
 
 ### 7. Train and backtest
 

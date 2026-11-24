@@ -161,9 +161,9 @@ The current stream store exposes event, candle-close, gap-minute, late-reject, i
 
 The event part contains a `raw_json` column with the original receiver payload. The payload `at` value stays in that payload and is never promoted to a timestamp column. Exact part schemas and recovery behavior are documented in [Streaming Runtime and Store](../system/16_STREAMING_RUNTIME_AND_STORE.md).
 
-`build` continues to read existing `.csv`, `.jsonl`, and `.parquet` files. It does not currently load the stream directory directly.
+`build` continues to read existing `.csv`, `.jsonl`, and `.parquet` files, and also accepts a stream events directory (the store root or its `events` directory). The hourly parts are concatenated and stable-sorted by `(timestamp, sequence)`.
 
-Use `runner.py serve --capture-only` to store events/candles without model inference. This is still persistent capture; there is no `--raw-dir ''` option.
+Use `runner.py serve --capture-only` to store events/candles without model inference, or `--shadow` to load a model and journal decisions without opening paper trades. This is still persistent capture; there is no `--raw-dir ''` option.
 
 ### Duplicate Policy
 

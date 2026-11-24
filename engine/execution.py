@@ -47,6 +47,50 @@ class Trade:
     pnl: float | None = None
     reason: str = ""
 
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-safe record."""
+
+        record = asdict(self)
+        for key in ("entry_timestamp", "expiry_timestamp", "resolved_at"):
+            value = record.get(key)
+            if isinstance(value, datetime):
+                record[key] = value.isoformat()
+        return record
+
+    @classmethod
+    def from_dict(cls, record: dict) -> "Trade":
+        """Rebuild a trade from a journal record."""
+
+        def moment(value):
+            if value is None:
+                return None
+            if isinstance(value, datetime):
+                return value
+            return datetime.fromisoformat(str(value))
+
+        return cls(
+            trade_id=int(record["trade_id"]),
+            snapshot_id=int(record["snapshot_id"]),
+            active_id=int(record["active_id"]),
+            direction=str(record["direction"]),
+            horizon_seconds=int(record["horizon_seconds"]),
+            stake=float(record["stake"]),
+            payout=float(record["payout"]),
+            entry_timestamp=moment(record["entry_timestamp"]),
+            entry_price=float(record["entry_price"]),
+            expiry_timestamp=moment(record["expiry_timestamp"]),
+            expected_value=float(record["expected_value"]),
+            status=str(record.get("status", OPEN)),
+            exit_price=(
+                None
+                if record.get("exit_price") is None
+                else float(record["exit_price"])
+            ),
+            resolved_at=moment(record.get("resolved_at")),
+            pnl=None if record.get("pnl") is None else float(record["pnl"]),
+            reason=str(record.get("reason", "")),
+        )
+
     def resolve(self, exit_price: float, resolved_at: datetime | None = None) -> "Trade":
         """Resolve the trade against an exit price.
 
@@ -89,6 +133,12 @@ class PaperBroker:
     @property
     def open_trades(self) -> list[Trade]:
         return [trade for trade in self.trades if trade.status == OPEN]
+
+    def restore(self, trades: list[Trade]) -> None:
+        """Replace the in-memory trade book after a restart."""
+
+        self.trades = list(trades)
+        self._next_id = max((trade.trade_id for trade in trades), default=-1) + 1
 
     def can_open(self, now: datetime) -> bool:
         # A trade past its expiry carries no market risk, even if it has not
@@ -188,14 +238,36 @@ class TradeJournal:
 
     def append(self, trade: Trade) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        record = asdict(trade)
-        for key in ("entry_timestamp", "expiry_timestamp", "resolved_at"):
-            value = record.get(key)
-            if isinstance(value, datetime):
-                record[key] = value.isoformat()
+        record = trade.to_dict()
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, default=str) + "\n")
 
     def append_many(self, trades: list[Trade]) -> None:
         for trade in trades:
             self.append(trade)
+
+    def load(self) -> list[Trade]:
+        """Return the latest record for each trade id.
+
+        The journal appends a record when a trade opens and again when it
+        resolves. A malformed journal raises instead of silently resetting the
+        runtime gates to a clean state.
+        """
+
+        if not self.path.is_file():
+            return []
+        latest: dict[int, Trade] = {}
+        with self.path.open("r", encoding="utf-8") as handle:
+            for line_no, line in enumerate(handle, start=1):
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    record = json.loads(text)
+                    trade = Trade.from_dict(record)
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                    raise ExecutionError(
+                        f"trade journal {self.path} line {line_no} is unreadable"
+                    ) from exc
+                latest[trade.trade_id] = trade
+        return [latest[trade_id] for trade_id in sorted(latest)]

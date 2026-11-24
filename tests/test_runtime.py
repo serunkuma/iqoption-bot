@@ -7,7 +7,13 @@ from pathlib import Path
 import numpy as np
 
 from engine.config import Config
-from engine.execution import LOST, Trade
+from engine.execution import (
+    LOST,
+    OPEN,
+    ExecutionError,
+    Trade,
+    TradeJournal,
+)
 from engine.features import CORE_FEATURES
 from engine.models import (
     Calibrator,
@@ -89,7 +95,15 @@ def drive(
 
 
 class RuntimeTests(unittest.TestCase):
-    def make_runtime(self, directory, config, suite):
+    def make_runtime(
+        self,
+        directory,
+        config,
+        suite,
+        *,
+        shadow: bool = False,
+        trade_journal: TradeJournal | None = None,
+    ):
         store = StreamStore(
             Path(directory) / "stream",
             interval_seconds=config.candles.interval_seconds,
@@ -103,6 +117,8 @@ class RuntimeTests(unittest.TestCase):
             suite,
             config,
             decisions_dir=Path(directory) / "decisions",
+            trade_journal=trade_journal,
+            shadow=shadow,
         )
         return store, runtime
 
@@ -240,6 +256,142 @@ class RuntimeTests(unittest.TestCase):
             self.assertIn("below_hurdle", reasons)
             runtime.close()
             store.close()
+
+    def test_shadow_mode_journals_without_opening_trades(self) -> None:
+        config = make_config()
+        with tempfile.TemporaryDirectory() as directory:
+            store, runtime = self.make_runtime(
+                directory, config, stub_suite(config), shadow=True
+            )
+            drive(store, runtime, minutes=8)
+
+            self.assertGreaterEqual(runtime.counters.shadow, 1)
+            self.assertEqual(runtime.counters.trades, 0)
+            self.assertEqual(runtime.broker.trades, [])
+            actions = {r["action"] for r in self.journal_records(directory)}
+            self.assertIn("shadow", actions)
+            self.assertNotIn("trade", actions)
+            runtime.close()
+            store.close()
+
+    def test_shadow_mode_ignores_prior_paper_positions(self) -> None:
+        config = make_config()
+        with tempfile.TemporaryDirectory() as directory:
+            journal = TradeJournal(Path(directory) / "trades.jsonl")
+            journal.append(
+                Trade(
+                    trade_id=3,
+                    snapshot_id=-3,
+                    active_id=0,
+                    direction="call",
+                    horizon_seconds=60,
+                    stake=1.0,
+                    payout=0.80,
+                    entry_timestamp=BASE,
+                    entry_price=1.0,
+                    expiry_timestamp=BASE + timedelta(hours=1),
+                    expected_value=0.5,
+                    status=OPEN,
+                )
+            )
+            store, runtime = self.make_runtime(
+                directory,
+                config,
+                stub_suite(config),
+                shadow=True,
+                trade_journal=journal,
+            )
+            drive(store, runtime, minutes=8)
+
+            self.assertEqual(runtime.broker.trades, [])
+            self.assertGreaterEqual(runtime.counters.shadow, 1)
+            runtime.close()
+            store.close()
+
+    def test_restart_restores_an_open_trade_gate(self) -> None:
+        config = make_config()
+        with tempfile.TemporaryDirectory() as directory:
+            journal = TradeJournal(Path(directory) / "trades.jsonl")
+            journal.append(
+                Trade(
+                    trade_id=5,
+                    snapshot_id=-1,
+                    active_id=0,
+                    direction="call",
+                    horizon_seconds=60,
+                    stake=1.0,
+                    payout=0.80,
+                    entry_timestamp=BASE,
+                    entry_price=1.0,
+                    expiry_timestamp=BASE + timedelta(hours=1),
+                    expected_value=0.5,
+                    status=OPEN,
+                )
+            )
+            store, runtime = self.make_runtime(
+                directory, config, stub_suite(config), trade_journal=journal
+            )
+            drive(store, runtime, minutes=8)
+
+            self.assertEqual(len(runtime.broker.trades), 1)
+            self.assertGreaterEqual(runtime.counters.trade_open, 1)
+            reasons = {r["reason"] for r in self.journal_records(directory)}
+            self.assertIn("trade_open", reasons)
+            runtime.close()
+            store.close()
+
+    def test_restart_restores_the_daily_loss_stop(self) -> None:
+        config = make_config(execution={"daily_loss_limit": 0.5})
+        with tempfile.TemporaryDirectory() as directory:
+            journal = TradeJournal(Path(directory) / "trades.jsonl")
+            journal.append(
+                Trade(
+                    trade_id=7,
+                    snapshot_id=-2,
+                    active_id=0,
+                    direction="call",
+                    horizon_seconds=60,
+                    stake=1.0,
+                    payout=0.80,
+                    entry_timestamp=BASE,
+                    entry_price=1.0,
+                    expiry_timestamp=BASE + timedelta(seconds=60),
+                    expected_value=0.5,
+                    status=LOST,
+                    exit_price=0.9,
+                    resolved_at=BASE + timedelta(seconds=60),
+                    pnl=-1.0,
+                )
+            )
+            store, runtime = self.make_runtime(
+                directory, config, stub_suite(config), trade_journal=journal
+            )
+            drive(store, runtime, minutes=8)
+
+            self.assertGreaterEqual(runtime.counters.daily_stop, 1)
+            reasons = {r["reason"] for r in self.journal_records(directory)}
+            self.assertIn("daily_stop", reasons)
+            runtime.close()
+            store.close()
+
+    def test_corrupt_trade_journal_refuses_startup(self) -> None:
+        config = make_config()
+        with tempfile.TemporaryDirectory() as directory:
+            journal = TradeJournal(Path(directory) / "trades.jsonl")
+            journal.path.parent.mkdir(parents=True, exist_ok=True)
+            journal.path.write_text("not a trade\n", encoding="utf-8")
+            with self.assertRaises(ExecutionError):
+                self.make_runtime(
+                    directory, config, stub_suite(config), trade_journal=journal
+                )
+
+    def test_serve_parser_supports_shadow_mode(self) -> None:
+        from runner import build_parser
+
+        args = build_parser().parse_args(["serve", "--shadow"])
+        self.assertTrue(args.shadow)
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["serve", "--shadow", "--capture-only"])
 
 
 if __name__ == "__main__":

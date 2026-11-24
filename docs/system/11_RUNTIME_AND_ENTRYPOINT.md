@@ -12,7 +12,7 @@ Every command loads `config/default.toml` (or `--config`), validates it, and fai
 
 | Command | Purpose | Writes |
 |---------|---------|--------|
-| `serve` | Stream accepted ticks to the event/candle store; optionally make paper decisions | `data/stream/` |
+| `serve` | Stream accepted ticks to the event/candle store; optionally journal decisions or make paper trades | `data/stream/` |
 | `build` | Build the tick store, snapshots, features, labels, and dataset | `data/*.parquet` |
 | `train` | Train the four calibrated horizon models | Timestamped `.joblib` plus manifest |
 | `backtest` | Replay the held-out evaluation slice through router and paper broker | `reports/backtest.{json,md}` |
@@ -30,9 +30,10 @@ Global flags:
 
 ```powershell
 .\.venv\Scripts\python.exe runner.py serve --capture-only
+.\.venv\Scripts\python.exe runner.py serve --shadow
 .\.venv\Scripts\python.exe runner.py model-check --model data\models\suite-YYYYMMDDTHHMMSSZ.joblib
 .\.venv\Scripts\python.exe runner.py replay --events data\stream\events --candles data\stream\candles
-.\.venv\Scripts\python.exe runner.py build --input data\ticks.csv
+.\.venv\Scripts\python.exe runner.py build --input data\stream\events
 .\.venv\Scripts\python.exe runner.py train
 .\.venv\Scripts\python.exe runner.py backtest
 .\.venv\Scripts\python.exe runner.py diagnose --input data\raw\ticks-2026-11-18.jsonl
@@ -44,6 +45,7 @@ Global flags:
 
 ```powershell
 .\.venv\Scripts\python.exe runner.py serve --capture-only
+.\.venv\Scripts\python.exe runner.py serve --shadow
 .\.venv\Scripts\python.exe runner.py serve --model data\models\suite-YYYYMMDDTHHMMSSZ.joblib
 ```
 
@@ -54,8 +56,9 @@ Global flags:
 | `--stream-dir` | `[stream].root` | Stream store root |
 | `--model` | `[models].runtime_path` | Manifest-bearing `.joblib` artifact |
 | `--capture-only` | off | Store ticks/candles without loading a model or making decisions |
+| `--shadow` | off | Load the model, journal decisions, and never open a paper trade |
 
-Without `--capture-only`, startup requires a compatible `.joblib` artifact and fails with exit code `1` when it is missing, corrupt, or incompatible. The loaded artifact stays pinned for the process. The receiver forwards accepted events to `StreamStore`; it does not write the former daily raw JSONL capture. See [Streaming Runtime and Store](16_STREAMING_RUNTIME_AND_STORE.md) for event, storage, recovery, decision, and failure contracts.
+`--capture-only` and `--shadow` are mutually exclusive. Without either, startup requires a compatible `.joblib` artifact and fails with exit code `1` when it is missing, corrupt, or incompatible. The loaded artifact stays pinned for the process. The receiver forwards accepted events to `StreamStore`; it does not write the former daily raw JSONL capture. See [Streaming Runtime and Store](16_STREAMING_RUNTIME_AND_STORE.md) for event, storage, recovery, decision, and failure contracts.
 
 ---
 
@@ -67,9 +70,9 @@ Without `--capture-only`, startup requires a compatible `.joblib` artifact and f
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--input` | `data/ticks.csv` | `.csv`, `.jsonl`, or `.parquet` tick input |
+| `--input` | `data/ticks.csv` | `.csv`, `.jsonl`, `.parquet`, or a stream events directory |
 
-The input suffix selects the loader. CSV and JSONL enforce the tick contract; Parquet is trusted as an already-validated store.
+The input suffix selects the loader. CSV and JSONL enforce the tick contract; Parquet is trusted as an already-validated store. A directory is treated as a stream store root (or its `events` directory) and its hourly `part-*.parquet` files are concatenated and stable-sorted by `(timestamp, sequence)`.
 
 Outputs, all under `config.store`:
 
@@ -133,9 +136,9 @@ When the suite has no evaluation rows, the command warns, writes a report with a
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--input` | `data/ticks.csv` | `.csv`, `.jsonl`, or `.parquet` |
+| `--input` | `data/ticks.csv` | `.csv`, `.jsonl`, `.parquet`, or a stream events directory |
 
-Prints row count, duplicate `(timestamp, price)` count, out-of-order rows, first and last tick, sequence range, span in seconds, and minutes with ticks. It accepts a file input, not a stream directory.
+Prints row count, duplicate `(timestamp, price)` count, out-of-order rows, first and last tick, sequence range, span in seconds, and minutes with ticks. A directory input reads the streaming store's event parts.
 
 ---
 

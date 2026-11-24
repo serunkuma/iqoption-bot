@@ -47,7 +47,7 @@ Expected log lines include:
 Listening for tick data on ws://localhost:8765
 ```
 
-`--capture-only` persists accepted events and completed candles under `data\stream\` without loading a model. Without this flag, `serve` requires a compatible `.joblib` artifact and records candle-close paper decisions. It never places broker orders.
+`--capture-only` persists accepted events and completed candles under `data\stream\` without loading a model. `--shadow` loads the model and journals decisions but never opens a paper trade. Without either flag, `serve` requires a compatible `.joblib` artifact and records candle-close paper decisions. It never places broker orders.
 
 Optional overrides:
 
@@ -89,7 +89,7 @@ Check:
 | `span seconds` | Shorter than the session |
 | `minutes with ticks` | Noticeably fewer than the span in minutes |
 
-`diagnose` reads a `.csv`, `.jsonl`, or `.parquet` file; it does not take a stream directory. Use `replay` to compare persisted stream events and candles.
+`diagnose` reads a `.csv`, `.jsonl`, `.parquet`, or a stream events directory. Use `replay` to compare persisted stream events and candles.
 
 ### 6. Build the dataset
 
@@ -443,8 +443,11 @@ Before any trading procedure is added:
 | Install dependencies | `py -m pip install -r requirements.txt` |
 | Capture ticks | `.\.venv\Scripts\python.exe runner.py serve` |
 | Capture without model decisions | `.\.venv\Scripts\python.exe runner.py serve --capture-only` |
+| Shadow decisions without paper trades | `.\.venv\Scripts\python.exe runner.py serve --shadow` |
 | Diagnose a file capture | `.\.venv\Scripts\python.exe runner.py diagnose --input data\ticks.csv` |
+| Diagnose a stream capture | `.\.venv\Scripts\python.exe runner.py diagnose --input data\stream\events` |
 | Build store and dataset | `.\.venv\Scripts\python.exe runner.py build --input data\ticks.csv` |
+| Build from stream events | `.\.venv\Scripts\python.exe runner.py build --input data\stream\events` |
 | Train models | `.\.venv\Scripts\python.exe runner.py train` |
 | Backtest | `.\.venv\Scripts\python.exe runner.py backtest` |
 | Validate model artifact | `.\.venv\Scripts\python.exe runner.py model-check --model data\models\suite-<timestamp>.joblib` |

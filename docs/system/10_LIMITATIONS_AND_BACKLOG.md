@@ -27,7 +27,7 @@ Status: Current
 | Live feature path | `serve` computes candle-close features only with a validated artifact | No sustained shadow/paper parity evidence exists |
 | Incremental build | `build` reads a whole file and rewrites all artefacts | Long captures mean long rebuilds |
 | Snapshot storage | `store.snapshots_path` is reserved but unused | Snapshot metadata is rebuilt, not persisted |
-| Candle storage | Stream candles are persisted in immutable hourly parts; offline build also groups candles in memory | No compaction, retention, or direct stream-directory build input |
+| Candle storage | Stream candles are persisted in immutable hourly parts; offline build also groups candles in memory | No compaction or retention policy; build can now read the stream event directory directly |
 | Performance | Features are computed per snapshot in Python loops | Slow on multi-day captures |
 
 ### Models
@@ -50,7 +50,7 @@ Status: Current
 |------|------------|--------|
 | Execution | Paper only; `demo` and `live` raise | No real order path |
 | Risk | Fixed stake, one open trade, cooldown, and a daily realized-loss stop | No complete risk manager, consecutive-loss policy, sizing policy, or kill switch |
-| Journals | Runtime writes decision and trade JSONL journals | Restart continuity, retention, and audit workflows are unvalidated |
+| Journals | Runtime writes decision and trade JSONL journals and restores paper state from them | Retention and external audit workflows are unvalidated |
 | Monitoring | Console logs and offline reports | No metrics or alerts |
 | Config | Receiver host/port remain module defaults with CLI overrides; receiver history buffer remains a constant | Some capture settings still require code changes |
 | Packaging | `requirements.txt` only; no installable package | Reproducibility depends on the venv |

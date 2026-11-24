@@ -63,7 +63,7 @@ The sample was treated as a **reference prototype**, not as a specification and 
 
 ## Decision
 
-The external sample is historical context. The canonical definitions are the data and system specifications; the canonical implementation is `engine/` with `amt-v3` features, the `core16-v1` model vector, and `snapshot-horizon-v1` labels. Any future change must be justified against the specs and the validation gate, not against the sample.
+The external sample is historical context. The canonical definitions are the data and system specifications; the canonical implementation is `engine/` with the current `amt-v4` features, `core16-v2` model vector, and `snapshot-horizon-v1` labels. At the time of this note those were `amt-v3` and `core16-v1`; the reference is versioned, not permanent. Any future change must be justified against the specs and the validation gate, not against the sample.
 
 The raw discussion input was removed from the working tree after its useful content was absorbed. It remains available in git history.
 

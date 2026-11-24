@@ -51,6 +51,10 @@ LEGACY_FILENAME = "suite.pkl"
 
 def _load_store(path: str | Path, config: Config) -> TickStore:
     source = Path(path)
+    if source.is_dir():
+        return TickStore.from_stream_events(
+            source, active_id=config.instrument.active_id
+        )
     suffix = source.suffix.lower()
     if suffix == ".csv":
         return TickStore.from_csv(source, active_id=config.instrument.active_id)
@@ -82,6 +86,7 @@ def _find_model(config: Config, explicit: str | None) -> Path:
 
 def cmd_serve(args: argparse.Namespace, config: Config) -> int:
     root = args.stream_dir or config.stream.root
+    shadow = bool(getattr(args, "shadow", False))
     suite: ModelSuite | None = None
 
     if not args.capture_only:
@@ -117,7 +122,12 @@ def cmd_serve(args: argparse.Namespace, config: Config) -> int:
             config,
             decisions_dir=Path(root) / "decisions",
             trade_journal=TradeJournal(Path(root) / "trades.jsonl"),
+            shadow=shadow,
         )
+        if shadow:
+            logger.warning(
+                "Shadow mode: decisions are journaled, no paper trades are opened."
+            )
     else:
         logger.warning(
             "Capture-only mode: ticks and candles are stored, no decisions are made."
@@ -376,14 +386,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=".joblib artifact (default: config [models].runtime_path)",
     )
-    serve.add_argument(
+    mode = serve.add_mutually_exclusive_group()
+    mode.add_argument(
         "--capture-only",
         action="store_true",
         help="store ticks and candles without inference",
     )
+    mode.add_argument(
+        "--shadow",
+        action="store_true",
+        help="infer and journal decisions without opening paper trades",
+    )
 
     build = sub.add_parser("build", help="build store, snapshots, and dataset")
-    build.add_argument("--input", default=None, help="tick CSV, JSONL, or Parquet")
+    build.add_argument(
+        "--input",
+        default=None,
+        help="tick CSV, JSONL, Parquet, or a stream events directory",
+    )
 
     train = sub.add_parser("train", help="train the horizon model suite")
     train.add_argument("--dataset", default=None)

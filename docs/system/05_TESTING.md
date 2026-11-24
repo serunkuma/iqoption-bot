@@ -14,7 +14,7 @@ Status: Current
 
 Import `engine` before pandas in any ad-hoc script; see the Windows LightGBM caveat below.
 
-The current suite includes 159 tests. Use the actual output from the current checkout as the source of truth when reporting the count.
+The current suite includes 167 tests. Use the actual output from the current checkout as the source of truth when reporting the count.
 
 ---
 

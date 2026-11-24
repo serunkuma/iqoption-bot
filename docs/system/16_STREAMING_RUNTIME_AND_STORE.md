@@ -57,6 +57,8 @@ Event parts include sequence, UTC `received_at`, `active_id`, price, offset, and
 
 `state.json` is written atomically and records the last flushed sequence, last finalized bucket, stream configuration metadata, and the forming candle state. On startup, the store reads state or recovers the last sequence/bucket from part files, and restores a saved forming candle when available. The runtime rolling feature window is not rebuilt from historical candle parts, so it warms up again with newly closed contiguous candles after restart.
 
+The runtime reloads paper trades from `trades.jsonl` at startup. The one-open-trade gate, cooldown clock, and daily realized-loss stop therefore survive a restart, and an open trade still resolves on a later event. A malformed trade journal refuses startup instead of silently resetting the gates. Shadow mode starts with an empty book so prior paper positions cannot suppress predictions. The feature window still warms up from scratch.
+
 The store flushes on candle close and when the pending event count reaches `stream.flush_events`. A write failure retains buffered rows and marks storage degraded; runtime decisions are blocked while degraded. If the pending-event limit is exceeded, ingestion fails explicitly. Shutdown flushes pending parts and saves state; it does not force-finalize the forming candle.
 
 `runner.py serve` no longer writes daily `data/raw/*.jsonl` files. Existing CSV, JSONL, and Parquet tick files remain supported by `build` and `diagnose`.
@@ -65,7 +67,7 @@ The store flushes on candle close and when the pending event count reaches `stre
 
 The default window contains seven contiguous completed candles. The forming candle is excluded from features. Until the window is ready, each close is journaled as `warmup`. A ready window uses the same stateless `compute_features` function as offline builds, with the versioned `core16-v2` vector and `amt-v4` diagnostics.
 
-The runtime loads and validates the `.joblib` artifact before starting unless `--capture-only` is selected. It then:
+The runtime loads and validates the `.joblib` artifact before starting unless `--capture-only` is selected. With `--shadow`, it loads the model and journals decisions but never opens a paper trade; the router and gate reasons are still recorded so shadow output can be compared with paper and offline results. Otherwise it:
 
 1. Resolves any due paper trade using the accepted event price.
 2. Computes features at the candle close and predicts per-horizon Call probabilities.
@@ -86,9 +88,11 @@ Legacy pickle suites can still be loaded for analysis and backtesting, but runti
 
 ```powershell
 .\.venv\Scripts\python.exe runner.py serve --capture-only
+.\.venv\Scripts\python.exe runner.py serve --shadow
 .\.venv\Scripts\python.exe runner.py serve --model data\models\suite-YYYYMMDDTHHMMSSZ.joblib
 .\.venv\Scripts\python.exe runner.py model-check --model data\models\suite-YYYYMMDDTHHMMSSZ.joblib
 .\.venv\Scripts\python.exe runner.py replay --events data\stream\events --candles data\stream\candles
+.\.venv\Scripts\python.exe runner.py build --input data\stream\events
 ```
 
 `model-check` prints the manifest and compatibility result. `replay` rebuilds candles from stored event parts and compares them with recorded candles; it can also compare features when given `--dataset`.
@@ -115,4 +119,4 @@ Legacy pickle suites can still be loaded for analysis and backtesting, but runti
 
 ---
 
-*Last updated: 2026-11-21*
+*Last updated: 2026-11-22*

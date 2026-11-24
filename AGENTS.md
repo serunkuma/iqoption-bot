@@ -105,7 +105,7 @@ Points `core.hooksPath` at `.githooks/` so the `pre-commit` hook runs the docume
 .\.venv\Scripts\python.exe runner.py serve
 ```
 
-Listens on `ws://localhost:8765` and persists accepted events and completed candles under `data/stream/`. Use `--capture-only` to store data without loading a model; otherwise a compatible runtime `.joblib` artifact is required. See [RUNBOOK.md](RUNBOOK.md).
+Listens on `ws://localhost:8765` and persists accepted events and completed candles under `data/stream/`. Use `--capture-only` to store data without loading a model, or `--shadow` to load the model and journal decisions without opening paper trades; otherwise a compatible runtime `.joblib` artifact is required and paper trades are allowed. See [RUNBOOK.md](RUNBOOK.md).
 
 ### Load the extension
 
@@ -353,11 +353,16 @@ The streaming runtime and offline path are implemented; they use the same causal
 | 2026-11-21 | Preserve repeated accepted events with distinct sequence identities; report exact timestamp/price repeats rather than deduplicating | Maintain the capture record and make tick-density impact measurable |
 | 2026-11-21 | Use one candle-close decision per eligible minute instead of the former `:30` snapshot offset | Align offline snapshots and runtime decisions to finalized candles |
 | 2026-11-21 | Synchronize operator and system docs with the streaming/runtime implementation | Document behavior and limitations without changing code |
+| 2026-11-22 | Implement `serve --shadow`; shadow journals router and gate outcomes without opening paper trades | Record baseline predictions for parity comparison without accumulating paper positions |
+| 2026-11-22 | Accept a stream events directory in `build` and `diagnose` | Close the capture-to-research loop without a manual conversion step |
+| 2026-11-22 | Reload paper trades from `trades.jsonl` at startup and fail closed on a corrupt journal | Keep the one-open-trade, cooldown, and daily loss gates across restarts |
+| 2026-11-22 | Use `docs/system/16_STREAMING_RUNTIME_AND_STORE.md` as the current implementation doc and keep the migration record in `docs/planning/streaming-runtime-and-store.md` | Separate current behavior from historical planning |
+| 2026-11-22 | Keep `[stream]` paths fixed under `root`; do not add `state_file`/`decisions_dir` keys | One validated root avoids path combinations the store does not support |
 
 ### Known Limitations
 
 - Frame semantics, real tick cadence, and feed completeness are unverified.
-- Runtime inference and paper decisions exist, but sustained shadow/paper parity and a real-data edge have not been established.
+- Runtime inference, shadow mode, and paper decisions exist, but sustained shadow/paper parity and a real-data edge have not been established.
 - No broker order adapter, learned selector, complete risk manager, or kill switch.
 - Streaming events and candles persist in hourly parts; offline snapshots are not stored separately, and stream retention/compaction is undefined.
 - Batch `build` is not incremental; the runtime rolling candle window warms up after restart.
@@ -458,9 +463,10 @@ Removed and recoverable from git history: `amt/` package, root `receiver.py`, ro
 | 2026-11-20 | Added the versioned `.githooks/pre-commit` documentation check and `tools/install_hooks.py`; test suite is 121 | Implementation agent |
 | 2026-11-20 | Documented the distinction between current offline ML, deterministic routing, and the planned `.joblib` runtime and learned selector | Documentation agent |
 | 2026-11-21 | Updated the guide for streaming persistence, candle-close inference, model manifests, paper runtime gates, and remaining validation gaps | Documentation agent |
+| 2026-11-22 | Added shadow mode, stream-directory build input, and restart-safe paper gates; recorded the migration deviations | Implementation agent |
 
 ---
 
 ## 10. Last Updated
 
-**2026-11-21 by Documentation agent**
+**2026-11-22 by Implementation agent**

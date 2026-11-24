@@ -34,6 +34,7 @@ Status: Planning
 - [x] Replay the paper broker over held-out probabilities.
 - [x] Implement a candle-close paper runtime that consumes new completed candles.
 - [x] Persist runtime paper decisions, trades, and outcomes to JSONL.
+- [x] Provide a baseline shadow mode (`serve --shadow`) that journals decisions without opening trades.
 - [ ] Compare live paper results with offline backtest results.
 
 ### Runtime inference and selection

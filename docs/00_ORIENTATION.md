@@ -29,7 +29,7 @@ Features are market-description inputs to models, not trade signals by themselve
 
 ## 2. The Two Data Paths
 
-The live store and offline dataset are distinct paths. `serve` stores events and closed candles; `build` consumes a file input and creates snapshots, features, labels, and a dataset.
+The live store and offline dataset are distinct paths. `serve` stores events and closed candles; `build` consumes a tick file or the stream's event parts and creates snapshots, features, labels, and a dataset.
 
 ```text
 Live stream:

@@ -72,6 +72,7 @@ class RuntimeCounters:
     daily_stop: int = 0
     no_entry_tick: int = 0
     store_degraded: int = 0
+    shadow: int = 0
     resolved: int = 0
     gap_closes: int = 0
 
@@ -86,6 +87,7 @@ class RuntimeCounters:
             "daily_stop": self.daily_stop,
             "no_entry_tick": self.no_entry_tick,
             "store_degraded": self.store_degraded,
+            "shadow": self.shadow,
             "resolved": self.resolved,
             "gap_closes": self.gap_closes,
         }
@@ -120,6 +122,7 @@ class RuntimeEngine:
         *,
         decisions_dir: str | Path | None = None,
         trade_journal: TradeJournal | None = None,
+        shadow: bool = False,
     ) -> None:
         problems = suite.validate(config)
         if problems:
@@ -130,6 +133,7 @@ class RuntimeEngine:
         self.store = store
         self.suite = suite
         self.config = config
+        self.shadow = shadow
         self.broker = PaperBroker(config)
         self.journal = DecisionJournal(
             decisions_dir
@@ -142,6 +146,28 @@ class RuntimeEngine:
         self.last_decision_bucket: int | None = None
         self.decision_id = 0
         self.counters = RuntimeCounters()
+        self._restore_trades()
+
+    def _restore_trades(self) -> None:
+        """Reload paper trades so the risk gates survive a restart.
+
+        A shadow session starts with an empty book: prior paper positions must
+        not suppress shadow predictions.
+        """
+
+        if self.trade_journal is None or self.shadow:
+            return
+        restored = self.trade_journal.load()
+        if not restored:
+            return
+        self.broker.restore(restored)
+        resolved = [
+            trade.resolved_at.timestamp()
+            for trade in restored
+            if trade.resolved_at is not None
+        ]
+        if resolved:
+            self.last_close_epoch = max(resolved)
 
     # -- ingestion hook --------------------------------------------------
     def on_ingest(self, result: IngestResult) -> None:
@@ -248,6 +274,19 @@ class RuntimeEngine:
                 latency_ms,
                 action="no_trade",
                 reason=gate,
+                proposal=proposal,
+            )
+            return
+
+        if self.shadow:
+            self.counters.shadow += 1
+            self._journal(
+                candle,
+                values,
+                probabilities,
+                latency_ms,
+                action="shadow",
+                reason=None,
                 proposal=proposal,
             )
             return

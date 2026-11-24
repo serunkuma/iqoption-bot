@@ -138,6 +138,34 @@ class TickStoreTests(unittest.TestCase):
         timestamps = store.frame["timestamp"]
         self.assertTrue(timestamps.is_monotonic_increasing)
 
+    def test_stream_event_parts_load_as_a_tick_table(self) -> None:
+        from engine.stream import StreamStore
+
+        with tempfile.TemporaryDirectory() as directory:
+            stream = StreamStore(
+                directory, flush_events=2, compression="none", active_id=0
+            )
+            for tick in synthetic_ticks(minutes=2, per_minute=3):
+                stream.ingest(
+                    0,
+                    {
+                        "received_at": tick.timestamp.isoformat(),
+                        "close": tick.price,
+                    },
+                )
+            stream.close()
+
+            loaded = TickStore.from_stream_events(directory, active_id=0)
+
+        self.assertEqual(len(loaded), 6)
+        self.assertEqual(loaded.frame["sequence"].tolist(), list(range(6)))
+        self.assertEqual(loaded.stats["duplicate_rows"], 0)
+
+    def test_missing_stream_events_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(TickStoreError):
+                TickStore.from_stream_events(directory)
+
 
 if __name__ == "__main__":
     unittest.main()

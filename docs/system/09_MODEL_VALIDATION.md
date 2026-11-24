@@ -147,11 +147,11 @@ The selector promotion principles remain planning work. The runtime loader and f
 | Has a real multi-day capture been validated? | No |
 | Is live execution safe? | No |
 
-### Historical synthetic run (pre-candle-close contract)
+### Current synthetic run (candle-close contract)
 
-The following checked-in report predates the candle-close contract and used the former `:30` snapshot cadence, `core16-v1`, and `amt-v3`. Its metrics do not describe the current runtime/model versions. The checked-in synthetic capture (48,000 ticks over 800 minutes, one instrument) built 793 snapshots and 3,172 dataset rows. Training produced all four horizons with 77–79 evaluation rows each; every Platt fit was rejected as non-increasing, so identity calibration shipped. Held-out AUC ranged from 0.501 to 0.605 and Brier from 0.250 to 0.270.
+The local report is regenerated from the synthetic capture (48,000 ticks over 800 minutes, one instrument) under the current contract: candle-close decisions, `core16-v2`, `amt-v4`, and a manifest-bearing `.joblib`. It built 793 snapshots and 3,172 dataset rows. Training produced all four horizons with 78–79 evaluation rows each; every Platt fit was rejected as non-increasing, so identity calibration shipped. Held-out AUC ranged from 0.479 to 0.572 and Brier from 0.259 to 0.284.
 
-That historical backtest routed 81 snapshots, opened 55 trades, and closed 25 winners against 30 losers: win rate 0.455, PnL `-9.8` at unit stake. At the 60s payout of 0.80 the breakeven win rate is 0.556, so that run lost, as expected.
+That backtest routed 81 snapshots, opened 59 trades, and closed 27 winners against 32 losers: win rate 0.458, PnL `-10.12` at unit stake. At the 60s payout of 0.80 the breakeven win rate is 0.556, so that run lost, as expected.
 
 That is a correct and useful result. It shows the harness measures a losing system honestly instead of manufacturing trades. It says nothing about real AMT behaviour, because synthetic ticks have no auction structure.
 

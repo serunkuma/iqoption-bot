@@ -143,6 +143,7 @@ flowchart LR
 - [Phase 2: Candles and AMT features](planning/phase-2-candles-and-amt-features.md)
 - [Phase 3: ML pipeline and validation](planning/phase-3-ml-pipeline-and-validation.md)
 - [Phase 4: ML runtime, execution, and operations](planning/phase-4-execution-and-operations.md)
+- [Streaming runtime and store migration](planning/streaming-runtime-and-store.md)
 - [ML runtime and signal selection](planning/ml-runtime-and-signal-selection.md)
 - [Streaming runtime and store](system/16_STREAMING_RUNTIME_AND_STORE.md)
 

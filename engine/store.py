@@ -284,6 +284,45 @@ class TickStore:
         store.stats["out_of_order"] = _count_out_of_order(ticks)
         return store
 
+    @classmethod
+    def from_stream_events(
+        cls, root: str | Path, *, active_id: int | None = None
+    ) -> "TickStore":
+        """Load the streaming store's hourly event parts as a tick table.
+
+        ``root`` may be the stream store root (``data/stream``) or its
+        ``events`` directory. Parts are concatenated and then stable-sorted by
+        ``(timestamp, sequence)`` exactly like other batch inputs.
+        """
+
+        base = Path(root)
+        events_dir = base / "events" if (base / "events").is_dir() else base
+        if not events_dir.is_dir():
+            raise TickStoreError(f"stream events directory not found: {events_dir}")
+        paths = sorted(events_dir.glob("*/*/part-*.parquet"))
+        if not paths:
+            raise TickStoreError(f"no stream event parts under {events_dir}")
+
+        frames = [pd.read_parquet(path) for path in paths]
+        frame = pd.concat(frames, ignore_index=True)
+        if "received_at" in frame.columns:
+            frame = frame.rename(columns={"received_at": "timestamp"})
+        columns = [
+            name
+            for name in (
+                "timestamp",
+                "sequence",
+                "utc_offset_seconds",
+                "price",
+                "active_id",
+            )
+            if name in frame.columns
+        ]
+        frame = frame.loc[:, columns]
+        if active_id is not None and "active_id" in frame.columns:
+            frame = frame.loc[frame["active_id"].astype("Int64") == active_id]
+        return cls(frame)
+
     # -- mutations -------------------------------------------------------
     def appended(self, ticks: Sequence[Tick]) -> "TickStore":
         """Return a new store with additional ticks merged in arrival order."""
